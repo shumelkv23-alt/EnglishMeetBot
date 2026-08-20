@@ -131,6 +131,8 @@ from app.models import (  # noqa: E402
 )
 from app.services.onboarding import current_week_start  # noqa: E402
 from app.services.question_bank import bank_questions_for  # noqa: E402
+from app.messaging import send_message  # noqa: E402
+from app.schemas import MessagePayload  # noqa: E402
 
 
 def _config_slots(db_cfg_value) -> list[dict]:
@@ -350,3 +352,108 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     await db.commit()
     logger.info("weekly_poll_submitted profile_id=%s slots=%s", profile.id, parsed["slot_ids"])
     return {"ok": True, "reason": "saved"}
+
+
+# --- генерация и рассылка ---
+from app.services.llm_questions import generate_personal_question  # noqa: E402
+
+
+async def ensure_personal_questions(db: AsyncSession, poll: WeeklyPoll, profiles: list[Profile]) -> int:
+    """Пакетная генерация персональных вопросов (подход Б, идемпотентно).
+
+    Для профилей с interests зовёт LLM; результат — upsert в poll_questions.
+    Сбой генерации — просто нет записи (в карточке будет запасной вопрос банка).
+    Возвращает количество созданных вопросов.
+    """
+    created = 0
+    for profile in profiles:
+        exists = (
+            await db.execute(
+                select(PollQuestion).where(
+                    PollQuestion.poll_id == poll.id,
+                    PollQuestion.profile_id == profile.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is not None:
+            continue  # уже сгенерировано — не дублируем
+        interests = list(profile.interests or [])
+        text = generate_personal_question(interests)
+        if text is None:
+            logger.warning("poll_question_llm_fallback profile_id=%s", profile.id)
+            continue
+        db.add(PollQuestion(poll_id=poll.id, profile_id=profile.id, question_text=text))
+        created += 1
+    await db.commit()
+    logger.info("poll_questions_generated created=%s", created)
+    return created
+
+
+async def send_weekly_polls(db: AsyncSession, now: datetime) -> dict:
+    """Шаг 1: опрос недели; шаг 2: генерация; шаг 3: рассылка карточек;
+    шаг 4: poll_responses (pending). Ответивших не беспокоим."""
+    poll = await ensure_weekly_poll(db, now)
+    if poll is None:
+        return {"poll_id": None, "sent": 0, "personal_ok": False}
+
+    bank_q1, bank_q2 = bank_questions_for(poll.week_start)
+    profiles = (await db.execute(
+        select(Profile).where(
+            Profile.is_active.is_(True),
+            Profile.onboarding_completed.is_(True),
+            Profile.workspace_user_id.isnot(None),
+        )
+    )).scalars().all()
+
+    await ensure_personal_questions(db, poll, profiles)
+
+    # персональный текст каждого (или запасной банковский)
+    personal_by_profile = {}
+    for row in (await db.execute(
+        select(PollQuestion).where(PollQuestion.poll_id == poll.id)
+    )).scalars().all():
+        personal_by_profile[row.profile_id] = row.question_text
+
+    responded_profile_ids = set(
+        (await db.execute(
+            select(PollResponse.profile_id).where(
+                PollResponse.poll_id == poll.id,
+                PollResponse.status == "responded",
+            )
+        )).scalars().all()
+    )
+
+    slots = (await db.execute(
+        select(PollSlot).where(PollSlot.poll_id == poll.id).order_by(PollSlot.slot_start)
+    )).scalars().all()
+    slot_labels = [
+        {"id": s.id, "label": f"{s.slot_start.strftime('%a')} {s.slot_start.strftime('%H:%M')}"}
+        for s in slots
+    ]
+
+    sent = 0
+    for profile in profiles:
+        if profile.id in responded_profile_ids:
+            continue
+        personal_q = personal_by_profile.get(profile.id) or bank_q2  # фолбэк на банк
+        card = build_poll_card(personal_q, bank_q1, slot_labels)
+        send_message(
+            profile.workspace_user_id,
+            MessagePayload(text="Еженедельный опрос 🗓️", card=card),
+        )
+        response = (
+            await db.execute(
+                select(PollResponse).where(
+                    PollResponse.profile_id == profile.id,
+                    PollResponse.poll_id == poll.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if response is None:
+            response = PollResponse(profile_id=profile.id, poll_id=poll.id)
+            db.add(response)
+        await db.flush()
+        sent += 1
+    await db.commit()
+    logger.info("weekly_polls_sent poll=%s sent=%s", poll.id, sent)
+    return {"poll_id": poll.id, "sent": sent, "personal_ok": bool(personal_by_profile)}

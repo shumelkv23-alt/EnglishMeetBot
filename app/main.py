@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.scheduler import init_scheduler, shutdown_scheduler
+
     logger.info(f"Starting up application in {settings.app_env} mode...")
+    init_scheduler()
     yield
+    shutdown_scheduler()
     logger.info("Shutting down application...")
 
 # ВАЖНО: переменная должна называться именно app
