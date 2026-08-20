@@ -55,6 +55,32 @@ def _extract_space_name(chat_data: dict) -> str:
     return ""
 
 
+async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
+    """Обработать сабмит карточки еженедельного опроса (add-on формат)."""
+    form_inputs = common.get("formInputs", {}) or {}
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    result = {"ok": False, "reason": "no_user"}
+    if workspace_user_id:
+        try:
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                    chat_space_id=_extract_space_name(chat_data) or None,
+                )
+                from app.services.weekly_poll import submit_poll
+                result = await submit_poll(db, profile, form_inputs)
+        except Exception:
+            logger.exception("weekly_poll_submit_failed")
+            result = {"ok": False, "reason": "db_error"}
+    if result.get("ok"):
+        return {"text": "Спасибо! Ответы и голоса сохранены. 🤝"}
+    if result.get("reason") == "closed":
+        return {"text": "Опрос на эту неделю уже закрыт — встретимся на следующей! ⏳"}
+    return {"text": "Не получилось сохранить ответы — заполни хотя бы что-нибудь и нажми «Отправить»."}
+
+
 async def _submit_onboarding(user: dict, space_name: str, form_inputs: dict) -> dict:
     """Сохранить анкету онбординга и вернуть текстовое сообщение для пользователя."""
     workspace_user_id = user.get("name", "")
@@ -375,6 +401,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 user = chat_data.get("user", {})
                 response_msg = await _submit_onboarding(user, space_name, form_inputs)
                 return _addon_response(response_msg)
+            if method == "submit_weekly_poll":
+                return _addon_response(await _submit_weekly_poll(chat_data, common))
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 

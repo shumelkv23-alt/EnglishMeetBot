@@ -111,3 +111,242 @@ def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
             }
         ]
     }
+
+
+# --- БД-часть (интеграционная) ---
+from datetime import date as date_type, timezone  # noqa: E402
+
+from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+
+from app.models import (  # noqa: E402
+    Answer,
+    Config,
+    PollQuestion,
+    PollResponse,
+    PollSlot,
+    PollVote,
+    Profile,
+    WeeklyPoll,
+)
+from app.services.onboarding import current_week_start  # noqa: E402
+from app.services.question_bank import bank_questions_for  # noqa: E402
+
+
+def _config_slots(db_cfg_value) -> list[dict]:
+    """Слоты из config: [{"day": "Wed", "time": "19:00"}, ...] или []."""
+    if isinstance(db_cfg_value, dict):
+        raw = db_cfg_value.get("poll_slots") or []
+    else:
+        raw = db_cfg_value or []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _slot_datetime_for_week(week_start: date_type, day: str, time: str) -> datetime | None:
+    """datetime слота в рамках недели (понедельник = day 0)."""
+    days = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+    if day not in days or len(time) != 5 or time[2] != ":":
+        return None
+    hour, minute = int(time[:2]), int(time[3:5])
+    return datetime.combine(
+        week_start + timedelta(days=days[day]),
+        datetime.min.time().replace(hour=hour, minute=minute),
+        tzinfo=None,
+    )
+
+
+async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Config:
+    cfg = (await db.execute(select(Config).where(Config.key == key))).scalar_one_or_none()
+    if cfg is None:
+        cfg = Config(key=key, value=fallback_value)
+        db.add(cfg)
+        await db.commit()
+        await db.refresh(cfg)
+    return cfg
+
+
+async def active_poll_for_week(db: AsyncSession, week_start: date_type) -> WeeklyPoll | None:
+    return (
+        await db.execute(
+            select(WeeklyPoll).where(
+                WeeklyPoll.week_start == week_start,
+                WeeklyPoll.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _week_aware(week_start: date_type, naive: datetime) -> datetime:
+    """Формат хранения проекта — timestamptz; храним с UTC-поясом.
+
+    week_start как date и также как базис для замены даты — на случай слота,
+    выпавшего на другие сутки из-за week_start + days.
+    """
+    return naive.replace(tzinfo=timezone.utc)
+
+
+async def _copy_last_week_slots(db: AsyncSession, poll: WeeklyPoll, week_start: date_type) -> int:
+    """Автокопия слотов прошлой недели (REQ-10) для нового опроса."""
+    prev_poll = (
+        await db.execute(
+            select(WeeklyPoll)
+            .where(WeeklyPoll.week_start < week_start)
+            .order_by(WeeklyPoll.week_start.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if prev_poll is None:
+        return 0
+    prev_slots = (
+        await db.execute(select(PollSlot).where(PollSlot.poll_id == prev_poll.id))
+    ).scalars().all()
+    if not prev_slots:
+        return 0
+    created = 0
+    for ps in prev_slots:
+        wd, tm = ps.slot_start.strftime("%a"), ps.slot_start.strftime("%H:%M")
+        new_start = _slot_datetime_for_week(week_start, wd, tm)
+        if new_start is None:
+            continue
+        db.add(PollSlot(
+            poll_id=poll.id,
+            slot_start=_week_aware(week_start, new_start),
+            slot_end=_week_aware(week_start, new_start) + timedelta(minutes=90),
+            location=ps.location,
+            priority=ps.priority,
+        ))
+        created += 1
+    return created
+
+
+async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> WeeklyPoll | None:
+    """Активный опрос недели; если нет — создать: слоты из config или
+    автокопия прошлой недели, дедлайн = min(слоты) − VOTING_BUFFER_HOURS."""
+    week_start = current_week_start()
+    poll = await active_poll_for_week(db, week_start)
+    if poll is not None:
+        return poll
+
+    cfg = await get_or_create_config(db, "poll_slots", [])
+    slots_cfg = _config_slots(cfg.value)
+
+    poll = WeeklyPoll(
+        week_start=week_start,
+        voting_deadline=now + timedelta(days=7),  # временное; пересчитаем ниже
+        status="active",
+    )
+    db.add(poll)
+    await db.flush()
+
+    slot_times: list[datetime] = []
+    for item in slots_cfg:
+        dt = _slot_datetime_for_week(week_start, item.get("day", ""), item.get("time", ""))
+        if dt is None:
+            continue
+        db.add(PollSlot(
+            poll_id=poll.id,
+            slot_start=_week_aware(week_start, dt),
+            slot_end=_week_aware(week_start, dt) + timedelta(minutes=90),
+            location=item.get("location", "Онлайн (Meet)"),
+            priority=item.get("priority", 0),
+        ))
+        slot_times.append(dt)
+
+    if not slot_times and await _copy_last_week_slots(db, poll, week_start) == 0:
+        logger.warning("weekly_poll_no_slots week=%s", week_start)
+
+    slots = (await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))).scalars().all()
+    if slots:
+        poll.voting_deadline = compute_deadline(
+            [s.slot_start for s in slots],
+            int((await get_or_create_config(db, "voting_buffer_hours", 24)).value or 24),
+        )
+    await db.commit()
+    await db.refresh(poll)
+    logger.info("weekly_poll_created id=%s deadline=%s slots=%s", poll.id, poll.voting_deadline, len(slots))
+    return poll
+
+
+async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> dict:
+    """Сабмит карточки опроса: ответы + голоса + отметка responded."""
+    poll = await active_poll_for_week(db, current_week_start())
+    if poll is None:
+        return {"ok": False, "reason": "no_poll"}
+    deadline = poll.voting_deadline
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if deadline < datetime.now(timezone.utc):
+        return {"ok": False, "reason": "closed"}
+
+    parsed = parse_poll_form(form_inputs)
+    if not parsed["answers"] and not parsed["slot_ids"]:
+        return {"ok": False, "reason": "empty"}
+
+    personal_q = bank_questions_for(poll.week_start)
+    personal_text = personal_q[0]
+    bank_text = personal_q[1]
+
+    llm_row = (
+        await db.execute(
+            select(PollQuestion).where(
+                PollQuestion.poll_id == poll.id,
+                PollQuestion.profile_id == profile.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if llm_row is not None:
+        personal_text = llm_row.question_text
+
+    q_by_name = dict(parsed["answers"])
+    if "q_llm" in q_by_name and q_by_name["q_llm"].strip():
+        db.add(Answer(
+            profile_id=profile.id,
+            question_text=personal_text,
+            answer_text=q_by_name["q_llm"].strip(),
+            is_public=profile.public_consent,
+            week_start=poll.week_start,
+        ))
+    if "q_bank" in q_by_name and q_by_name["q_bank"].strip():
+        db.add(Answer(
+            profile_id=profile.id,
+            question_text=bank_text,
+            answer_text=q_by_name["q_bank"].strip(),
+            is_public=profile.public_consent,
+            week_start=poll.week_start,
+            question_rotation_id=(poll.week_start.isocalendar().week % 20),
+        ))
+
+    # голоса: удалить старые за этот опрос и вставить новые (идемпотентно)
+    await db.execute(
+        delete(PollVote).where(
+            PollVote.profile_id == profile.id,
+            PollVote.poll_slot_id.in_(
+                select(PollSlot.id).where(PollSlot.poll_id == poll.id)
+            ),
+        )
+    )
+    response = (
+        await db.execute(
+            select(PollResponse).where(
+                PollResponse.profile_id == profile.id,
+                PollResponse.poll_id == poll.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if response is None:
+        response = PollResponse(profile_id=profile.id, poll_id=poll.id)
+        db.add(response)
+    if parsed["slot_ids"]:
+        response.status = "responded"
+        response.responded_at = datetime.now(timezone.utc)
+    await db.flush()
+    for slot_id in parsed["slot_ids"]:
+        slot = (
+            await db.execute(select(PollSlot).where(PollSlot.id == slot_id, PollSlot.poll_id == poll.id))
+        ).scalar_one_or_none()
+        if slot is not None:
+            db.add(PollVote(profile_id=profile.id, poll_slot_id=slot_id, poll_response_id=response.id))
+
+    await db.commit()
+    logger.info("weekly_poll_submitted profile_id=%s slots=%s", profile.id, parsed["slot_ids"])
+    return {"ok": True, "reason": "saved"}
