@@ -422,3 +422,30 @@ class Config(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class PollQuestion(Base):
+    """Сгенерированный LLM-вопрос для конкретного участника недельного опроса (11. poll_questions).
+
+    Только для LLM-вопросов (персональных). Банковский вопрос в БД не хранится:
+    он детерминирован по ISO-номеру недели (см. app/services/question_bank.py).
+    """
+
+    __tablename__ = "poll_questions"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "profile_id", name="unique_poll_profile_question"),
+        Index("idx_poll_questions_poll", "poll_id"),
+        Index("idx_poll_questions_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    poll_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
