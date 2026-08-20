@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     google_sa_key_file: str = "sa-key.json"  # ключ сервисного аккаунта (app-auth, chat.bot)
     chat_test_space: str = ""          # space для ручных проверок проактивной отправки
 
+    # LLM (OpenRouter)
+    openrouter_api_key: str = ""  # ключ OpenRouter; пусто = генерация отключена (банк)
+    llm_model: str = "deepseek/deepseek-chat"  # модель OpenRouter (можно free/дёшево)
+
     @property
     def database_url(self) -> str:
         return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.db_host}:{self.db_port}/{self.postgres_db}"
