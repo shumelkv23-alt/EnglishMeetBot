@@ -55,6 +55,28 @@ def _extract_space_name(chat_data: dict) -> str:
     return ""
 
 
+async def _handle_checkin_present(chat_data: dict, common: dict) -> dict:
+    """Кнопка «Я на встрече»: запись self-check-in, если в окне (REQ-9.6)."""
+    params = common.get("parameters") or {}
+    instance_id = str(params.get("instance", ""))
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    result = {"ok": False, "within": False}
+    if workspace_user_id and instance_id.isdigit():
+        try:
+            from app.services.checkin import submit_checkin
+
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
+                result = await submit_checkin(db, profile, int(instance_id))
+        except Exception:
+            logger.exception("checkin_submit_failed")
+    text = "Ты на встрече! Баллы зачислены 🎉" if result.get("within") else (
+        "Кнопка вне окна встречи — отметка не засчитана ⏳"
+    )
+    return {"text": text}
+
+
 async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
     """Обработать сабмит карточки еженедельного опроса (add-on формат)."""
     form_inputs = common.get("formInputs", {}) or {}
@@ -403,6 +425,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 return _addon_response(response_msg)
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
+            if method == "checkin_present":
+                return _addon_response(await _handle_checkin_present(chat_data, common))
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 

@@ -25,3 +25,143 @@ def build_escalation_text() -> str:
         "Не получилось выбрать время встречи на эту неделю: кворум не набран. "
         "Реши вручную или задай новые слоты, пожалуйста. 🙏"
     )
+
+
+# --- БД-часть ---
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import AsyncSessionLocal
+from app.messaging import send_message
+from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
+from app.schemas import MessagePayload
+from app.services.checkin import checkin_window, build_checkin_card, job_ids as checkin_job_ids
+from app.services.invites import _theme_from_activity  # noqa: F401  (переэкспорт для API)
+from app.services.reminders import reminder_at, reminder_job_id
+
+logger = logging.getLogger(__name__)
+
+
+async def _config_value(db: AsyncSession, key: str, default=None):
+    cfg = (await db.execute(select(Config).where(Config.key == key))).scalar_one_or_none()
+    return cfg.value if cfg is not None else default
+
+
+def _scheduler() -> object | None:
+    from app.scheduler import scheduler
+
+    return scheduler
+
+
+async def _profiles_of_poll(db: AsyncSession, poll_id: int) -> list[Profile]:
+    """Все профили, связанные с опросом (responded и pending)."""
+    return (await db.execute(
+        select(Profile).join(PollResponse, PollResponse.profile_id == Profile.id).where(
+            PollResponse.poll_id == poll_id,
+            Profile.workspace_user_id.isnot(None),
+        )
+    )).scalars().all()
+
+
+async def handle_time_finalized(
+    db: AsyncSession, instance_id: int, day: str, time: str,
+    activity: Activity | None = None, scheduled_start: datetime | None = None,
+) -> dict:
+    """При TIME_FINALIZED: личные приглашения ответившим на опрос, пост в Space,
+    джобы напоминания и check-in окна. REQ-5.1, REQ-5.2, REQ-9.2–9.3."""
+    poll_id = (await db.execute(
+        select(MeetingORM.poll_id).where(MeetingORM.id == instance_id)
+    )).scalar_one_or_none()
+    responders = []
+    if poll_id is not None:
+        responders = (await db.execute(
+            select(Profile).join(PollResponse, PollResponse.profile_id == Profile.id).where(
+                PollResponse.poll_id == poll_id,
+                PollResponse.status == "responded",
+                Profile.workspace_user_id.isnot(None),
+            )
+        )).scalars().all()
+
+    theme_text = _theme_from_activity(activity)
+    text = build_invite_text(day, time, theme_text)
+    sent = 0
+    for profile in responders:
+        send_message(profile.workspace_user_id, MessagePayload(text=text))
+        sent += 1
+
+    space_id = await _config_value(db, "space_id", "")
+    if space_id:
+        send_message(space_id, MessagePayload(text=f"🗓️ {text}"))
+
+    sch = _scheduler()
+    if scheduled_start is not None and sch is not None:
+        lead_hours = int(await _config_value(db, "meet_reminder_hours", 1) or 1)
+        sch.add_job(
+            _send_reminder, "date",
+            run_date=reminder_at(scheduled_start, lead_hours),
+            id=reminder_job_id(str(instance_id)),
+            replace_existing=True,
+            args=[str(instance_id)],
+        )
+        window_min = int(await _config_value(db, "checkin_window_min", 15) or 15)
+        open_at, close_at = checkin_window(scheduled_start, window_min)
+        sch.add_job(
+            _open_checkin, "date", run_date=open_at,
+            id=checkin_job_ids(str(instance_id))["open"], replace_existing=True,
+            args=[space_id, build_checkin_card(str(instance_id))],
+        )
+        sch.add_job(
+            _close_checkin, "date", run_date=close_at,
+            id=checkin_job_ids(str(instance_id))["close"], replace_existing=True,
+        )
+
+    logger.info("time_finalized_handled instance=%s invites=%s", instance_id, sent)
+    return {"invited": sent}
+
+
+async def handle_escalated(db: AsyncSession, instance_id: int) -> dict:
+    """При ESCALATED: одно сообщение организатору, участникам ничего (REQ-9.5, REQ-3.5)."""
+    organizer = await _config_value(db, "organizer_user_id", "")
+    if not organizer:
+        logger.warning("escalated_no_organizer instance=%s", instance_id)
+        return {"notified": False}
+    send_message(organizer, MessagePayload(text=build_escalation_text()))
+    logger.info("escalated_notified instance=%s", instance_id)
+    return {"notified": True}
+
+
+async def _send_reminder(instance_id: str) -> None:
+    """Напоминание за lead_hours до встречи участникам её опроса (REQ-9.2)."""
+    async with AsyncSessionLocal() as db:
+        meeting = (
+            await db.execute(select(MeetingORM).where(MeetingORM.id == int(instance_id)))
+        ).scalar_one_or_none()
+        if meeting is None:
+            logger.warning("reminder_no_meeting instance=%s", instance_id)
+            return
+        profiles = await _profiles_of_poll(db, meeting.poll_id)
+        text = build_invite_text(
+            meeting.scheduled_start.strftime("%a"),
+            meeting.scheduled_start.strftime("%H:%M"),
+            None,
+        )
+        for profile in profiles:
+            send_message(
+                profile.workspace_user_id,
+                MessagePayload(text=f"⏰ Через час встреча по английскому!\n\n{text}"),
+            )
+        logger.info("reminder_sent instance=%s profiles=%s", instance_id, len(profiles))
+
+
+def _open_checkin(space_id: str, card: dict) -> None:
+    """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space."""
+    if space_id:
+        send_message(space_id, MessagePayload(text="Встреча начинается — отметься! ✅", card=card))
+
+
+def _close_checkin() -> None:
+    """Закрытие окна: ничего не шлём (REQ-9.6 — вне окна кнопка не работает)."""
+    logger.info("checkin_window_closed")
