@@ -54,7 +54,7 @@ def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
     question_widgets = []
     for name, label in (("q_llm", personal_q), ("q_bank", bank_q)):
         question_widgets.append({
-            "textInput": {"name": name, "label": label, "multiline": True}
+            "textInput": {"name": name, "label": label}
         })
 
     slot_widgets = [{
