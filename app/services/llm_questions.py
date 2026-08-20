@@ -79,6 +79,7 @@ def generate_personal_question(
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.8,
+        "max_tokens": 1024,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
 

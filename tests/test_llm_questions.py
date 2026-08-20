@@ -49,4 +49,4 @@ def test_generate_http_error_returns_none(monkeypatch):
 
 def test_generate_without_key_skips_network():
     # без ключа даже не ходим в сеть — мгновенный None
-    assert generate_personal_question(["кино"], api_key=None) is None
+    assert generate_personal_question(["кино"], api_key="") is None
