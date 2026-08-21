@@ -13,7 +13,7 @@ from sqlalchemy import select
 async def main() -> None:
     async with AsyncSessionLocal() as db:
         poll = (await db.execute(
-            select(DailyPoll).where(DailyPoll.status == "active").order_by(DailyPoll.week_start.desc()).limit(1)
+            select(DailyPoll).where(DailyPoll.status == "active").order_by(DailyPoll.poll_date.desc()).limit(1)
         )).scalar_one_or_none()
         if poll is None:
             print("NO_ACTIVE_POLL — сначала прогони scripts/test_poll_flow.py")
