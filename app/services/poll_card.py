@@ -17,12 +17,10 @@ from datetime import date
 from app.services.poll_logic import RU_DAYS, week_dates
 
 TIME_LABEL = "13:00–14:00"
-# Плейсхолдеры тематических вопросов — заменятся, когда появятся
-# реальные вопросы из ТЗ (ответы пойдут в таблицу answers).
-DEFAULT_THEME_QUESTIONS = (
-    "Какая тема тебе интересна на этой встрече?",
-    "Что бы ты хотел(а) обсудить или попрактиковать?",
-)
+# Тематические вопросы больше не задаём — темы подбирает ИИ.
+# Пустой кортеж: poll_store.save_poll_vote итерирует по нему, но записей
+# в answers больше не делает.
+DEFAULT_THEME_QUESTIONS: tuple[str, ...] = ()
 
 
 def _day_item(d: date) -> dict:
@@ -35,21 +33,27 @@ def build_poll_card(
     week_start: date,
     user_name: str = "друг",
     quorum: int = 3,
+    min_day: date | None = None,
     action_function: str = "submit_poll_vote",
     action_method: str = "submit_poll_vote",
-    theme_questions: tuple[str, str] = DEFAULT_THEME_QUESTIONS,
 ) -> dict:
     """Собрать cardsV2 для голосования за день встречи.
 
+    min_day — нижняя граница выбора: дни раньше этой даты не показываем
+    (нельзя голосовать за прошедшие дни). None — показывать всю неделю.
+
+    Тематических вопросов больше нет — темы подбирает ИИ.
+
     Секции:
-      1. приветствие + правила (ближайший день с кворумом, время 13:00)
+      1. приветствие + правила (ближайший день с кворумом, время 13:00 мск)
       2. выбор дня (CHECK_BOX, можно несколько дней)
-      3. время (фиксированное 13:00–14:00)
-      4. тематика (2 вопроса-плейсхолдера)
-      5. кнопка «Забронировать день»
-      6. примечание о приватности
+      3. время (фиксированное 13:00–14:00 мск)
+      4. кнопка «Забронировать день»
+      5. примечание о приватности
     """
     days = week_dates(week_start)
+    if min_day is not None:
+        days = [d for d in days if d >= min_day]
 
     widgets_intro = [
         {
@@ -82,16 +86,6 @@ def build_poll_card(
                 "text": f"🕐 Время: {TIME_LABEL} (фиксированное, пока одно)"
             }
         }
-    ]
-
-    widgets_themes = [
-        {
-            "textInput": {
-                "name": f"q_theme{i + 1}",
-                "label": q,
-            }
-        }
-        for i, q in enumerate(theme_questions)
     ]
 
     widgets_submit = [
@@ -134,7 +128,6 @@ def build_poll_card(
             {"widgets": widgets_intro},
             {"header": "1. День", "widgets": widgets_days},
             {"header": "2. Время", "widgets": widgets_time},
-            {"header": "3. Тематика (поможет выбрать активность)", "widgets": widgets_themes},
             {"widgets": widgets_submit},
             {"widgets": widgets_privacy},
         ],

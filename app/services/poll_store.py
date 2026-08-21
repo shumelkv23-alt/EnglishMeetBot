@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.timeutil import app_today
 from app.models import (
     Answer,
     Config,
@@ -139,21 +140,24 @@ async def current_or_next_poll(db: AsyncSession, today: date) -> WeeklyPoll | No
 
 
 async def create_weekly_poll_and_broadcast(db: AsyncSession) -> dict:
-    """Воскресный сценарий: опрос на следующую неделю + карточка всем, кто писал боту.
+    """Понедельничный сценарий: опрос ТЕКУЩЕЙ недели + карточка всем, кто писал боту.
 
+    Карточка идёт в DM каждому участнику и (если настроена) в общую группу.
     Возвращает сводку {week_start, created, sent, skipped}.
     """
-    next_week = week_start_for(date.today()) + timedelta(days=7)
+    this_week = week_start_for(app_today())
     quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
 
     existing = (
-        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == next_week))
+        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == this_week))
     ).scalar_one_or_none()
     created = existing is None
 
-    poll = await get_or_create_poll_for_week(db, next_week)
+    poll = await get_or_create_poll_for_week(db, this_week)
 
-    card = build_poll_card(week_start=poll.week_start, quorum=quorum)["cardsV2"]
+    card = build_poll_card(
+        week_start=poll.week_start, quorum=quorum, min_day=app_today()
+    )["cardsV2"]
 
     profiles = (await db.execute(select(Profile))).scalars().all()
     sent, skipped = 0, 0
@@ -168,11 +172,14 @@ async def create_weekly_poll_and_broadcast(db: AsyncSession) -> dict:
             logger.exception("poll_card_send_failed profile_id=%s", profile.id)
             skipped += 1
 
+    # Дублируем карточку в общую группу (если настроена)
+    send_card_to_group(card)
+
     logger.info(
         "weekly_poll_broadcast week=%s created=%s sent=%s skipped=%s",
-        str(next_week), created, sent, skipped,
+        str(this_week), created, sent, skipped,
     )
-    return {"week_start": str(next_week), "created": created, "sent": sent, "skipped": skipped}
+    return {"week_start": str(this_week), "created": created, "sent": sent, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------
@@ -238,6 +245,15 @@ async def save_poll_vote(db: AsyncSession, profile: Profile, form_inputs: dict) 
         return (
             "Не вижу выбранных дней 🤔 Отметь хотя бы один день "
             "в карточке и нажми кнопку ещё раз."
+        )
+
+    # Запрет голосовать за прошедшие дни (по таймзоне бота)
+    today = app_today()
+    days = [d for d in days if d >= today]
+    if not days:
+        return (
+            "Нельзя голосовать за прошедшие дни 🙅 "
+            "Выбери день начиная с сегодняшнего."
         )
 
     week = week_start_for(days[0])
@@ -452,13 +468,14 @@ async def _announce_and_plan_reminder(
     for plan in plans:
         if plan.kind == "ANNOUNCEMENT":
             delivered = await _deliver_to_users(plan.recipients, plan.text)
+            send_to_group(plan.text)
             logger.info("announcement_sent delivered=%s", delivered)
     reminders = [p for p in plans if p.kind == "REMINDER"]
     return reminders[0] if reminders else None
 
 
 async def decide_tomorrow(db: AsyncSession, now: datetime) -> dict:
-    """Ежедневная проверка в 20:00 UTC: хватает ли голосов на завтрашний день.
+    """Ежедневная проверка в 20:00 (по таймзоне бота): хватает ли голосов на завтрашний день.
 
     Возвращает {'decision': Decision|None, 'reminder': MessagePlan|None}.
     MEETING   -> создаёт meeting_instances, закрывает опрос, шлёт анонс
@@ -536,6 +553,35 @@ def send_escalation(text: str) -> bool:
         return True
     except Exception:
         logger.exception("escalation_send_failed")
+        return False
+
+
+def send_to_group(text: str) -> bool:
+    """Отправить текст в общую группу (settings.chat_group_space).
+
+    False — группа не настроена (пустой chat_group_space) или отправка не удалась.
+    """
+    space = get_settings().chat_group_space
+    if not space:
+        return False
+    try:
+        chat_sender.send_text(space, text)
+        return True
+    except Exception:
+        logger.exception("group_send_failed")
+        return False
+
+
+def send_card_to_group(cards_v2: list[dict]) -> bool:
+    """Отправить карточку в общую группу. False — группа не настроена/ошибка."""
+    space = get_settings().chat_group_space
+    if not space:
+        return False
+    try:
+        chat_sender.send_card(space, cards_v2)
+        return True
+    except Exception:
+        logger.exception("group_card_send_failed")
         return False
 
 

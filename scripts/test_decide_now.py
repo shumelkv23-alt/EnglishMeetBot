@@ -6,17 +6,17 @@
 """
 import asyncio
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import AsyncSessionLocal  # noqa: E402
 from app.services.poll_store import decide_tomorrow, finalize_expired_weeks  # noqa: E402
+from app.timeutil import app_now  # noqa: E402
 
 
 async def main() -> None:
-    now = datetime.now(timezone.utc)
+    now = app_now()
     async with AsyncSessionLocal() as db:
         outcome = await decide_tomorrow(db, now)
         cancelled = await finalize_expired_weeks(db, now)

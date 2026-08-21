@@ -60,6 +60,11 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo
+
+# Пояс встреч и напоминаний. Должен совпадать с config.app_tz
+# (по умолчанию Europe/Moscow). Чистый модуль config не читает — фиксируем здесь.
+APP_TZ = ZoneInfo("Europe/Moscow")
 
 DEFAULT_START_HOUR = 13
 DEFAULT_START_MINUTE = 0
@@ -158,7 +163,7 @@ def build_week_slots(
 ) -> list[Slot]:
     """Свежий план слотов на неделю (все votes=0).
 
-    По умолчанию один слот в день в 13:00 (время пока фиксированное).
+    По умолчанию один слот в день в 13:00 по APP_TZ (время пока фиксированное).
     Передача times=[(12,0),(13,0),...] включит несколько времён на день.
 
     ПЕРЕЗАПИСЬ: при создании нового weekly_polls вызывающий слой
@@ -170,7 +175,7 @@ def build_week_slots(
     slots: list[Slot] = []
     for day in week_dates(week_start, days_count):
         for hour, minute in times:
-            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc)
+            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=APP_TZ)
             end = start + timedelta(minutes=slot_minutes)
             key = f"{day.isoformat()}T{hour:02d}{minute:02d}"
             slots.append(Slot(slot_key=key, day=day, start=start, end=end, votes=0, location=location))
@@ -359,7 +364,9 @@ def plan_week_messages(
     reminder_at = meeting.slot.start - timedelta(hours=reminder_hours)
 
     day_label = _day_name(meeting.day)
-    time_label = f"{meeting.slot.start:%H:%M}–{meeting.slot.end:%H:%M}"
+    start_local = meeting.slot.start.astimezone(APP_TZ)
+    end_local = meeting.slot.end.astimezone(APP_TZ)
+    time_label = f"{start_local:%H:%M}–{end_local:%H:%M}"
     location = meeting.slot.location or "место уточним позже"
 
     return [

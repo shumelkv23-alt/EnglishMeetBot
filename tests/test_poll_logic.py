@@ -61,7 +61,7 @@ def test_build_week_slots_default_one_per_day_at_13():
         assert slot.start.minute == 0
         assert (slot.end - slot.start).total_seconds() == 3600
         assert slot.votes == 0
-        assert slot.start.tzinfo is timezone.utc
+        assert slot.start.utcoffset() == timedelta(hours=3)  # Москва (UTC+3)
 
 
 def test_build_week_slots_keys_and_days():
@@ -314,6 +314,24 @@ def test_card_has_seven_days():
     assert sel["items"][6]["value"] == "2026-08-23"  # Вс
 
 
+def test_card_min_day_filters_past_days():
+    # неделя с Пн 2026-08-17; среда 19.08 -> показываем только Ср..Вс
+    card = build_poll_card(
+        week_start=date(2026, 8, 17), user_name="Тест", min_day=date(2026, 8, 19)
+    )
+    widgets = _all_widgets(card["cardsV2"][0]["card"]["sections"])
+    sel = next(w for w in widgets if "selectionInput" in w)["selectionInput"]
+    values = [it["value"] for it in sel["items"]]
+    assert values == [
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-22",
+        "2026-08-23",
+    ]
+    assert len(values) == 5
+
+
 def test_card_fixed_time_13():
     sections = _card_sections()
     time_section = next(s for s in sections if s.get("header") == "2. Время")
@@ -330,12 +348,11 @@ def test_card_submit_button_method():
     assert {"key": "method", "value": "submit_poll_vote"} in params
 
 
-def test_card_has_theme_questions():
+def test_card_has_no_theme_questions():
+    # темы подбирает ИИ — текстовых полей в карточке больше нет
     widgets = _all_widgets(_card_sections())
-    text_inputs = [w["textInput"] for w in widgets if "textInput" in w]
-    assert len(text_inputs) == 2
-    assert text_inputs[0]["name"] == "q_theme1"
-    assert text_inputs[1]["name"] == "q_theme2"
+    text_inputs = [w for w in widgets if "textInput" in w]
+    assert text_inputs == []
 
 
 def test_card_mentions_quorum():

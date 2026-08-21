@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     skip_jwt_validation: bool = False  # true только для локальных тестов без реального Google
     google_sa_key_file: str = "sa-key.json"  # ключ сервисного аккаунта (app-auth, chat.bot)
     chat_test_space: str = ""          # space для ручных проверок проактивной отправки
+    app_tz: str = "Europe/Moscow"       # таймзона бота: «сегодня» и cron считаются в этом поясе
+    chat_group_space: str = ""          # общая группа Google Chat (spaces/XXX); пусто — только DM
 
     @property
     def database_url(self) -> str:

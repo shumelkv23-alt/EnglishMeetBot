@@ -1,19 +1,20 @@
 # app/scheduler.py
 """APScheduler: еженедельное создание опросов и ежедневное решение «на завтра».
 
-Джобы (время UTC, часы читаются из config-таблицы):
-  - вс 10:00  create_weekly_poll_and_broadcast — опрос на след. неделю + карточки
+Джобы (время в config.app_tz, часы читаются из config-таблицы):
+  - пн 10:00  create_weekly_poll_and_broadcast — опрос текущей недели + карточки
   - ежедневно 20:00  decide_tomorrow + finalize_expired_weeks
 При фиксации встречи ставится date-job напоминания за meeting_reminder_hours
 до начала. При старте приложения незакрытые напоминания восстанавливаются
 из meeting_instances (иначе рестарт их бы потерял).
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models import MeetingInstance, WeeklyPoll
 from app.services.poll_logic import MeetingPlan, Slot, plan_week_messages
@@ -23,10 +24,11 @@ from app.services.poll_store import (
     decide_tomorrow,
     finalize_expired_weeks,
 )
+from app.timeutil import app_now
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler(timezone="utc")
+scheduler = AsyncIOScheduler(timezone=get_settings().app_tz)
 
 # config.poll_creation_day использует crontab-семантику (0=воскресенье),
 # APScheduler — имена дней; маппим явно, чтобы не зависеть от его нумерации
@@ -34,15 +36,15 @@ _DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 
 
 async def _job_create_weekly_poll() -> None:
-    """Вс 10:00 UTC: опрос следующей недели + рассылка карточек."""
+    """Пн 10:00 (config.app_tz): опрос текущей недели + рассылка карточек."""
     async with AsyncSessionLocal() as db:
         result = await create_weekly_poll_and_broadcast(db)
     logger.info("job_create_weekly_poll done %s", result)
 
 
 async def _job_daily_decision() -> None:
-    """Ежедневно 20:00 UTC: решение по завтрашнему дню + финал истёкших недель."""
-    now = datetime.now(timezone.utc)
+    """Ежедневно 20:00 (config.app_tz): решение по завтрашнему дню + финал истёкших недель."""
+    now = app_now()
     async with AsyncSessionLocal() as db:
         outcome = await decide_tomorrow(db, now)
         cancelled = await finalize_expired_weeks(db, now)
@@ -68,7 +70,7 @@ async def _job_daily_decision() -> None:
 
 def _schedule_reminder(send_at: datetime, recipients: list[str], text: str) -> bool:
     """Поставить одноразовую джобу напоминания на send_at."""
-    if send_at <= datetime.now(timezone.utc):
+    if send_at <= app_now():
         logger.warning("reminder_in_past_skipped send_at=%s", send_at.isoformat())
         return False
     scheduler.add_job(
@@ -91,10 +93,13 @@ async def _send_reminder_messages(recipients: list[str], text: str) -> None:
     Корутина: AsyncIOScheduler выполняет её в главном event loop,
     общий движок БД не трогается из чужих потоков.
     """
-    from app.services.poll_store import _deliver_to_users
+    from app.services.poll_store import _deliver_to_users, send_to_group
 
     delivered = await _deliver_to_users(tuple(recipients), text)
-    logger.info("reminder_delivered sent=%s of=%s", delivered, len(recipients))
+    group_sent = send_to_group(text)
+    logger.info(
+        "reminder_delivered sent=%s of=%s group=%s", delivered, len(recipients), group_sent
+    )
 
 
 async def rebuild_pending_reminders() -> int:
@@ -103,7 +108,7 @@ async def rebuild_pending_reminders() -> int:
     Для каждой meeting_instances со status='scheduled' и стартом в будущем —
     джоба за meeting_reminder_hours до начала (если время ещё не прошло).
     """
-    now = datetime.now(timezone.utc)
+    now = app_now()
     restored = 0
     async with AsyncSessionLocal() as db:
         reminder_hours = int(await config_value(db, "meeting_reminder_hours", 1) or 1)

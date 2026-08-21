@@ -1,6 +1,4 @@
 # app/api/google_chat.py
-from datetime import date, timedelta
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.auth.transport import requests as grequests
@@ -15,12 +13,14 @@ from app.services.onboarding import (
     save_answer,
 )
 from app.services.onboarding_answers import save_onboarding_answers
+from app.services.poll_logic import week_start_for
 from app.services.poll_store import (
-    current_or_next_poll,
+    get_or_create_poll_for_week,
     parse_poll_form,
     save_poll_vote,
 )
 from app.services.poll_card import build_poll_card
+from app.timeutil import app_today
 
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def _is_poll_command(raw_text: str) -> bool:
     return "голосование" in raw_text.lower()
 
 
-async def _submit_poll_vote(user: dict, form_inputs: dict) -> dict:
+async def _submit_poll_vote(user: dict, form_inputs: dict, space_name: str = "") -> dict:
     """Сохранить голос недельного опроса и вернуть текст-подтверждение."""
     workspace_user_id = user.get("name", "")
     if not workspace_user_id:
@@ -116,6 +116,7 @@ async def _submit_poll_vote(user: dict, form_inputs: dict) -> dict:
                 workspace_user_id=workspace_user_id,
                 email=user.get("email"),
                 display_name=user.get("displayName"),
+                chat_space_id=space_name or None,
             )
             confirmation = await save_poll_vote(db, profile, form_inputs)
     except Exception:
@@ -125,27 +126,23 @@ async def _submit_poll_vote(user: dict, form_inputs: dict) -> dict:
 
 
 async def _poll_card_for_user(user_name: str) -> dict:
-    """Карточка активного (или нового ближайшего) недельного опроса."""
+    """Карточка недельного опроса на ТЕКУЩУЮ неделю (только будущие дни)."""
+    today = app_today()
+    week_start = week_start_for(today)
     quorum = 3
-    week_start = None
     try:
         async with AsyncSessionLocal() as db:
-            from app.services.poll_store import config_value, get_or_create_poll_for_week
+            from app.services.poll_store import config_value
 
-            poll = await current_or_next_poll(db, date.today())
-            if poll is None:
-                monday = date.today() - timedelta(days=date.today().weekday())
-                poll = await get_or_create_poll_for_week(db, monday)
+            await get_or_create_poll_for_week(db, week_start)
             quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
-            week_start = poll.week_start
     except Exception:
+        # БД недоступна — показываем карточку текущей недели без создания опроса
         logger.exception("poll_card_lookup_failed")
 
-    if week_start is None:
-        # БД недоступна — показываем карточку текущей недели без создания опроса
-        today = date.today()
-        week_start = today - timedelta(days=today.weekday())
-    return build_poll_card(week_start=week_start, user_name=user_name, quorum=quorum)
+    return build_poll_card(
+        week_start=week_start, user_name=user_name, quorum=quorum, min_day=today
+    )
 
 
 def _action_method(action: dict) -> str:
@@ -438,7 +435,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if method == "submit_poll_vote":
                 form_inputs = common.get("formInputs", {}) or {}
                 user = chat_data.get("user") or chat_data.get("buttonClickedPayload", {}).get("user", {})
-                response_msg = await _submit_poll_vote(user, form_inputs)
+                space_name = _extract_space_name(chat_data)
+                response_msg = await _submit_poll_vote(user, form_inputs, space_name)
                 return _addon_response(response_msg)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
@@ -562,8 +560,9 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             function_name == "submit_poll_vote"
         ):
             user = event.get("user", {})
+            space_name = event.get("space", {}).get("name", "")
             form_inputs = event.get("common", {}).get("formInputs", {})
-            response_msg = await _submit_poll_vote(user, form_inputs)
+            response_msg = await _submit_poll_vote(user, form_inputs, space_name)
             return JSONResponse(content=response_msg)
         logger.info("event=CARD_CLICKED format=classic function=%s", function_name)
         return JSONResponse(content={})
