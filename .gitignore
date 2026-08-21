@@ -1,0 +1,21 @@
+# Секреты - никогда не коммитить
+.env
+.env.*
+!.env.example
+sa-key.json
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Виртуальные окружения
+venv/
+.venv/
+
+# Редакторы / ОС
+.idea/
+.vscode/
+.DS_Store
