@@ -14,13 +14,28 @@ from app.schemas import MessagePayload
 
 logger = logging.getLogger(__name__)
 
+try:
+    from app.services.chat_sender import find_user_dm_space, send_message as _chat_send
+
+    _REAL_API = True
+except Exception:
+    _REAL_API = False
+
 
 def send_message(user_id: str, payload: MessagePayload) -> None:
     """
-    STUB. Пока не подключён реальный Chat API — просто логирует вызов.
+    Отправить сообщение пользователю (user_id = workspace_user_id, 'users/...').
 
-    При подключении реальной отправки тело заменяется на вызов
-    app/services/chat_sender.py (service account), сигнатура остаётся той же.
-    Функция синхронная: реальный транспорт (requests) тоже синхронный.
+    Если реальный Chat API подключён — находит DM-пространство пользователя
+    и отправляет туда. Иначе — логирует вызов (стаб).
     """
+    if _REAL_API and user_id and user_id.startswith("users/"):
+        try:
+            space = find_user_dm_space(user_id)
+            if space:
+                _chat_send(space, text=payload.text, cards=[payload.card] if payload.card else None)
+                return
+            logger.warning("dm_space_not_found user=%s, fallback to stub", user_id)
+        except Exception:
+            logger.exception("real_send_failed user=%s", user_id)
     logger.info("[STUB SEND] to=%s text=%r card=%s", user_id, payload.text, payload.card)

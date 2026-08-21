@@ -37,14 +37,21 @@ def send_text(space_name: str, text: str) -> dict:
     return send_message(space_name, text=text)
 
 
-def send_message(space_name: str, text: str = "", cards_v2: list[dict] | None = None) -> dict:
-    """Отправить сообщение (текст и/или Cards V2) в пространство от имени бота."""
+def send_message(
+    space_name: str,
+    text: str = "",
+    cards_v2: list[dict] | None = None,
+    cards: list[dict] | None = None,
+) -> dict:
+    """Отправить сообщение (текст и/или Cards V1/V2) в пространство от имени бота."""
     creds = _bot_credentials()
     body: dict = {}
     if text:
         body["text"] = text
     if cards_v2:
         body["cardsV2"] = cards_v2
+    if cards:
+        body["cards"] = cards
     resp = requests.post(
         f"{CHAT_API_BASE}/{space_name}/messages",
         headers={"Authorization": f"Bearer {creds.token}"},
