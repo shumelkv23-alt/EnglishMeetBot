@@ -55,6 +55,17 @@ def _extract_space_name(chat_data: dict) -> str:
     return ""
 
 
+def _space_is_dm(space: dict) -> bool:
+    """True, если пространство — личная переписка (DM) с ботом, а не группа/комната.
+
+    chat_space_id в профиле семантически хранит ТОЛЬКО DM-пространство,
+    поэтому имя группы туда писать нельзя (группа хранится в config["space_id"]).
+    """
+    if not isinstance(space, dict):
+        return False
+    return space.get("type") == "DM" or space.get("spaceType") in ("DM", "DIRECT_MESSAGE")
+
+
 async def _handle_checkin_present(chat_data: dict, common: dict) -> dict:
     """Кнопка «Я на встрече»: запись self-check-in, если в окне (REQ-9.6)."""
     params = common.get("parameters") or {}
@@ -397,11 +408,19 @@ def _onboarding_card(user_name: str) -> dict:
 async def _register_contact(chat_data: dict, space_name: str) -> None:
     """Зарегистрировать профиль пользователя события (момент первого контакта).
 
-    chat_space_id фиксирует пространство/DM и нужен для проактивных DM-рассылок.
+    chat_space_id фиксирует ТОЛЬКО DM-пространство пользователя и нужен для
+    проактивных DM-рассылок. При добавлении бота в группу имя группы в DM-поле
+    не пишем — группа сохраняется отдельно в config["space_id"], а пользователь
+    без лички уходит в план @упоминаний, а не в DM.
     """
     user = chat_data.get("user", {})
     workspace_user_id = user.get("name", "")
     if workspace_user_id:
+        # Пространство события: в add-on формате лежит в addedToSpacePayload,
+        # в классическом — на верхнем уровне (event["space"]).
+        payload = chat_data.get("addedToSpacePayload")
+        space = payload.get("space") if isinstance(payload, dict) else chat_data.get("space")
+        dm_space = space_name if _space_is_dm(space) else None
         try:
             async with AsyncSessionLocal() as db:
                 await get_or_create_profile(
@@ -409,7 +428,7 @@ async def _register_contact(chat_data: dict, space_name: str) -> None:
                     workspace_user_id=workspace_user_id,
                     email=user.get("email"),
                     display_name=user.get("displayName"),
-                    chat_space_id=space_name or None,
+                    chat_space_id=dm_space,
                 )
         except Exception:
             logger.exception("db_write_failed")
