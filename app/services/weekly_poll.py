@@ -61,8 +61,13 @@ def parse_poll_form(form_inputs: dict) -> dict:
     return {"answers": answers, "slot_ids": slot_ids}
 
 
-def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
-    """Cards V2 карточка опроса: вопросы через textParagraph + ответы через textInput + чекбоксы дней."""
+def build_poll_card(personal_q: str, bank_q: str, slots: list[dict], action_url: str = "") -> dict:
+    """Cards V2 карточка опроса: вопросы через textParagraph + ответы через textInput + чекбоксы дней.
+
+    action_url — URL вебхука (chat_app_audience), куда Google отправит запрос
+    при клике на кнопку. В Chat Card API action.function — это URL, а не имя
+    функции (метод приходит отдельно через parameters).
+    """
     question_widgets = []
     for name, label in (("q_llm", personal_q), ("q_bank", bank_q)):
         question_widgets.append({
@@ -115,7 +120,7 @@ def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
                                                 "text": "Отправить",
                                                 "onClick": {
                                                     "action": {
-                                                        "function": "weekly_poll_submit",
+                                                        "function": action_url or "weekly_poll_submit",
                                                         "parameters": [
                                                             {"key": "method", "value": "submit_weekly_poll"}
                                                         ],
@@ -150,6 +155,7 @@ from app.models import (  # noqa: E402
     Profile,
     WeeklyPoll,
 )
+from app.config import get_settings  # noqa: E402
 from app.services.onboarding import current_week_start  # noqa: E402
 from app.services.question_bank import bank_questions_for  # noqa: E402
 from app.messaging import send_message  # noqa: E402
@@ -472,7 +478,7 @@ async def send_weekly_polls(db: AsyncSession, now: datetime) -> dict:
         if profile.id in responded_profile_ids:
             continue
         personal_q = personal_by_profile.get(profile.id) or bank_q2  # фолбэк на банк
-        card = build_poll_card(personal_q, bank_q1, slot_labels)
+        card = build_poll_card(personal_q, bank_q1, slot_labels, action_url=get_settings().chat_app_audience)
         send_message(
             profile.workspace_user_id,
             MessagePayload(text="Еженедельный опрос 🗓️", card=card),

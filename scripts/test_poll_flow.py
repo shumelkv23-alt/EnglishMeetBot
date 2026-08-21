@@ -55,7 +55,7 @@ async def main() -> None:
             "slots": {"stringInputs": {"value": [str(slots[0])] if slots else []}},
         }
         first = await submit_poll(db, profile, form)
-        second = await submit_poll(db, profile, form)  # повторный — должен перезаписать, не дублировать
+        second = await submit_poll(db, profile, form)  # повторный — перезапись, история копится
         print("first:", first, "second:", second)
 
         answers = (await db.execute(select(Answer).where(Answer.profile_id == profile.id))).scalars().all()

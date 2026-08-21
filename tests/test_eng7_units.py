@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.services.checkin import checkin_window, is_within_window, job_ids
+from app.services.checkin import build_checkin_card, checkin_window, is_within_window, job_ids
 from app.services.invites import build_escalation_text, build_invite_text
 from app.services.reminders import reminder_at, reminder_job_id
 
@@ -40,3 +40,11 @@ def test_is_within_window():
 def test_job_ids():
     assert job_ids("7") == {"open": "checkin_open_7", "close": "checkin_close_7"}
     assert reminder_job_id("7") == "remind_7"
+
+
+def test_build_checkin_card_button_function_is_url():
+    card = build_checkin_card("7", action_url="https://example.com/hook")
+    button = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"][0]
+    function = button["onClick"]["action"]["function"]
+    assert function == "https://example.com/hook"
+    assert function != "checkin_submit"

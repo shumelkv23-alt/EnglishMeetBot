@@ -19,8 +19,12 @@ def job_ids(instance_id: str) -> dict:
     return {"open": f"checkin_open_{instance_id}", "close": f"checkin_close_{instance_id}"}
 
 
-def build_checkin_card(instance_id: str) -> dict:
-    """Карточка с кнопкой «Я на встрече ✅» (для отправки при открытии окна)."""
+def build_checkin_card(instance_id: str, action_url: str = "") -> dict:
+    """Карточка с кнопкой «Я на встрече ✅» (для отправки при открытии окна).
+
+    action_url — URL вебхука (chat_app_audience): в Chat Card API action.function
+    это URL, а не имя функции (метод приходит через parameters).
+    """
     return {
         "cardsV2": [
             {
@@ -37,7 +41,7 @@ def build_checkin_card(instance_id: str) -> dict:
                                                 "text": "Я на встрече ✅",
                                                 "onClick": {
                                                     "action": {
-                                                        "function": "checkin_submit",
+                                                        "function": action_url or "checkin_submit",
                                                         "parameters": [
                                                             {"key": "method", "value": "checkin_present"},
                                                             {"key": "instance", "value": str(instance_id)},

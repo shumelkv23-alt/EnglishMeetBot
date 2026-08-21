@@ -51,3 +51,11 @@ def test_build_poll_card_structure():
     items = sections[1]["widgets"][0]["selectionInput"]["items"]
     assert items[0]["text"] == "Среда"
     assert items[0]["value"] == "7"
+
+
+def test_build_poll_card_button_function_is_url():
+    card = build_poll_card("q", "b", [{"id": 7, "label": "Wed"}], action_url="https://example.com/hook")
+    button = card["cardsV2"][0]["card"]["sections"][2]["widgets"][0]["buttonList"]["buttons"][0]
+    function = button["onClick"]["action"]["function"]
+    assert function == "https://example.com/hook"
+    assert function != "weekly_poll_submit"

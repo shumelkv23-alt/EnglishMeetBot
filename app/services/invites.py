@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.messaging import send_message
 from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
@@ -111,7 +112,7 @@ async def handle_time_finalized(
         sch.add_job(
             _open_checkin, "date", run_date=open_at,
             id=checkin_job_ids(str(instance_id))["open"], replace_existing=True,
-            args=[space_id, build_checkin_card(str(instance_id))],
+            args=[space_id, build_checkin_card(str(instance_id), action_url=get_settings().chat_app_audience)],
         )
         sch.add_job(
             _close_checkin, "date", run_date=close_at,

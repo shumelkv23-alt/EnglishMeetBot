@@ -18,6 +18,7 @@ from datetime import timezone
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models import Config, MeetingInstance as MeetingORM
 
@@ -56,7 +57,7 @@ async def restore_reminders_on_startup() -> int:
             scheduler.add_job(_send_reminder, "date", run_date=remind, id=reminder_job_id(str(m.id)), replace_existing=True, args=[str(m.id)])
             restored += 1
         if open_at > now:
-            scheduler.add_job(_open_checkin, "date", run_date=open_at, id=job_ids(str(m.id))["open"], replace_existing=True, args=[space_id, build_checkin_card(str(m.id))])
+            scheduler.add_job(_open_checkin, "date", run_date=open_at, id=job_ids(str(m.id))["open"], replace_existing=True, args=[space_id, build_checkin_card(str(m.id), action_url=get_settings().chat_app_audience)])
             restored += 1
         if close_at > now:
             scheduler.add_job(_close_checkin, "date", run_date=close_at, id=job_ids(str(m.id))["close"], replace_existing=True)
