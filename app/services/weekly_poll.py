@@ -3,6 +3,7 @@
 Чистые функции в начале файла (тестируются юнитами), БД-функции ниже
 (проверяются интеграционными скриптами на поднятом Postgres).
 """
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -219,6 +220,7 @@ from app.models import (  # noqa: E402
     PollVote,
     Profile,
     DailyPoll,
+    MeetingInstance,
 )
 from app.config import get_settings  # noqa: E402
 from app.services.onboarding import current_week_start  # noqa: E402
@@ -280,6 +282,78 @@ async def active_daily_poll(db: AsyncSession, day: date) -> DailyPoll | None:
             )
         )
     ).scalar_one_or_none()
+
+
+async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None:
+    """Активный опрос дня; если нет — создать опрос и слоты из config['daily_slots'].
+
+    Слоты создаются с slot_start = slot_datetime(t) (carrier-дата 2000-01-01) —
+    так submit_poll матчит голос по slot_start == slot_datetime(choice).
+    """
+    day = now.date()
+    poll = await active_daily_poll(db, day)
+    if poll is not None:
+        return poll
+
+    raw_slots = (await get_or_create_config(db, "daily_slots", ["15:00", "16:00", "17:00"])).value
+    if isinstance(raw_slots, str):  # запасной вариант: конфиг хранился как JSON-строка
+        raw_slots = json.loads(raw_slots)
+    slot_times = [t for t in raw_slots if isinstance(t, str)]
+
+    deadline_h = int((await get_or_create_config(db, "poll_deadline_hour", 14)).value or 14)
+    deadline_m = int((await get_or_create_config(db, "poll_deadline_minute", 0)).value or 0)
+
+    poll = DailyPoll(
+        poll_date=day,
+        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=timezone.utc),
+        status="active",
+    )
+    db.add(poll)
+    await db.flush()
+    for t in slot_times:
+        st = slot_datetime(t)
+        db.add(PollSlot(
+            poll_id=poll.id,
+            slot_start=st,
+            slot_end=st + timedelta(minutes=60),
+            location="Онлайн (Meet)",
+        ))
+    await db.commit()
+    logger.info("daily_poll_created id=%s date=%s slots=%s", poll.id, day, len(slot_times))
+    return poll
+
+
+async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
+    """Подвести итог дня: создать встречи для времён, набравших порог.
+
+    Возвращает {"result": resolve_day_result(...), "space_id": из config}.
+    """
+    slots = (await db.execute(
+        select(PollSlot).where(PollSlot.poll_id == poll.id)
+    )).scalars().all()
+    votes = {
+        s.slot_start.strftime("%H:%M"): (s.votes_count or 0)
+        for s in slots
+    }
+    quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
+    result = resolve_day_result(votes, quorum)
+
+    slot_by_time = {s.slot_start.strftime("%H:%M"): s for s in slots}
+    for t in result["meetings"]:
+        st = slot_datetime(t)
+        db.add(MeetingInstance(
+            poll_id=poll.id,
+            selected_slot_id=slot_by_time[t].id,
+            scheduled_start=st,
+            scheduled_end=st + timedelta(minutes=60),
+            location="Онлайн (Meet)",
+            status="scheduled",
+        ))
+    poll.status = "finalized" if result["meetings"] else "cancelled"
+    poll.closed_at = datetime.now(timezone.utc)
+    await db.commit()
+    space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+    return {"result": result, "space_id": space_id}
 
 
 async def active_poll_for_week(db: AsyncSession, week_start: date_type) -> DailyPoll | None:

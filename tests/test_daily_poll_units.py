@@ -5,6 +5,7 @@ from app.services.weekly_poll import (
     _normalize_submit_time,
     build_daily_poll_card,
     resolve_day_result,
+    slot_datetime,
 )
 
 
@@ -56,6 +57,18 @@ def test_is_valid_submit_time_rejects_garbage():
     assert _is_valid_submit_time("15") is False
     assert _is_valid_submit_time("18:00") is False
     assert _is_valid_submit_time("") is False
+
+
+def test_slot_datetime_parses_time():
+    dt = slot_datetime("15:00")
+    assert dt.hour == 15 and dt.minute == 0
+
+
+def test_slot_datetime_carrier_date():
+    # carrier-дата 2000-01-01 — по ней submit_poll матчит slot_start == slot_datetime(choice)
+    dt = slot_datetime("17:30")
+    assert dt.date().isoformat() == "2000-01-01"
+    assert dt.tzinfo is not None
 
 
 def test_build_daily_poll_card_has_four_buttons():

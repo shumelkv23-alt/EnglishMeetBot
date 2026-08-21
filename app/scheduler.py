@@ -1,4 +1,4 @@
-"""APScheduler: еженедельная рассылка опросов.
+"""APScheduler: ежедневный опрос — рассылка в 9:00, финализация в 14:05.
 
 Джобы ENG-7 (напоминания, check-in окно) добавляются из app/services/invites.py
 и app/services/checkin.py — сюда они не зашиты.
@@ -8,34 +8,86 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timezone
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
+from app.messaging import send_message
+from app.schemas import MessagePayload
 
 logger = logging.getLogger(__name__)
 
 scheduler: AsyncIOScheduler | None = None
 
 
-async def _run_weekly_poll() -> None:
-    from app.services.weekly_poll import send_weekly_polls
+async def _run_daily_poll() -> None:
+    """Джоб 9:00 — создать опрос дня и отправить карточку в группу."""
+    from app.services.weekly_poll import (
+        build_daily_poll_card,
+        ensure_daily_poll,
+        get_or_create_config,
+    )
 
     async with AsyncSessionLocal() as db:
-        result = await send_weekly_polls(db, datetime.now(timezone.utc))
-        logger.info("weekly_poll_job done result=%s", result)
+        now = datetime.now(timezone.utc)
+        poll = await ensure_daily_poll(db, now)
+        space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+        if poll is not None and space_id:
+            slots = ["15:00", "16:00", "17:00"]
+            send_message(space_id, MessagePayload(
+                text="Кто сегодня и во сколько? 🗓️",
+                card=build_daily_poll_card(slots, get_settings().chat_app_audience),
+            ))
+            logger.info("daily_poll_job sent poll=%s space=%s", poll.id, space_id)
+        else:
+            logger.info("daily_poll_job skipped poll=%s space_id=%r", poll.id if poll else None, space_id)
+
+
+async def _finalize_daily_poll() -> None:
+    """Джоб 14:05 — подвести итог опроса дня и оповестить группу."""
+    from app.services.weekly_poll import active_daily_poll, finalize_daily_poll
+
+    async with AsyncSessionLocal() as db:
+        poll = await active_daily_poll(db, datetime.now(timezone.utc).date())
+        if poll is None:
+            logger.info("daily_finalize_job no_active_poll")
+            return
+        outcome = await finalize_daily_poll(db, poll)
+        result = outcome["result"]
+        space_id = outcome.get("space_id") or ""
+        if not space_id:
+            logger.info("daily_finalize_job done poll=%s status=%s (space_id не задан)",
+                        poll.id, poll.status)
+            return
+        if result["meetings"]:
+            for t in result["meetings"]:
+                send_message(space_id, MessagePayload(text=f"Встреча сегодня в {t} 🎉"))
+            for choice, target in result["suggest_to"].items():
+                send_message(space_id, MessagePayload(text=f"Тем, кто выбрал {choice} — встреча также в {target}"))
+        else:
+            send_message(space_id, MessagePayload(text="Сегодня встреча не набирается — отмена"))
+        logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
 
 
 def init_scheduler() -> None:
-    """Создать и запустить шедулер с еженедельным джобом опроса."""
+    """Создать и запустить шедулер с ежедневными джобами опроса."""
     global scheduler
     if scheduler is not None:
         return
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
-        _run_weekly_poll,
+        _run_daily_poll,
         "cron",
-        day_of_week="mon",
-        hour=10,
+        hour=9,
         minute=0,
-        id="weekly-poll",
+        id="daily-poll",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _finalize_daily_poll,
+        "cron",
+        hour=14,
+        minute=5,
+        id="daily-finalize",
         replace_existing=True,
         misfire_grace_time=3600,
     )
