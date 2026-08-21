@@ -10,8 +10,7 @@ from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.messaging import send_message
-from app.schemas import MessagePayload
+from app.services.chat_sender import send_message as send_space_message
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +31,12 @@ async def _run_daily_poll() -> None:
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
         if poll is not None and space_id:
             slots = ["15:00", "16:00", "17:00"]
-            send_message(space_id, MessagePayload(
+            card = build_daily_poll_card(slots, get_settings().chat_app_audience)
+            send_space_message(
+                space_id,
                 text="Кто сегодня и во сколько? 🗓️",
-                card=build_daily_poll_card(slots, get_settings().chat_app_audience),
-            ))
+                cards_v2=card.get("cardsV2"),
+            )
             logger.info("daily_poll_job sent poll=%s space=%s", poll.id, space_id)
         else:
             logger.info("daily_poll_job skipped poll=%s space_id=%r", poll.id if poll else None, space_id)
@@ -59,11 +60,11 @@ async def _finalize_daily_poll() -> None:
             return
         if result["meetings"]:
             for t in result["meetings"]:
-                send_message(space_id, MessagePayload(text=f"Встреча сегодня в {t} 🎉"))
+                send_space_message(space_id, text=f"Встреча сегодня в {t} 🎉")
             for choice, target in result["suggest_to"].items():
-                send_message(space_id, MessagePayload(text=f"Тем, кто выбрал {choice} — встреча также в {target}"))
+                send_space_message(space_id, text=f"Тем, кто выбрал {choice} — встреча также в {target}")
         else:
-            send_message(space_id, MessagePayload(text="Сегодня встреча не набирается — отмена"))
+            send_space_message(space_id, text="Сегодня встреча не набирается — отмена")
         logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
 
 

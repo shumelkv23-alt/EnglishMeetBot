@@ -190,12 +190,13 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
 
     slot_by_time = {s.slot_start.strftime("%H:%M"): s for s in slots}
     for t in result["meetings"]:
-        st = slot_datetime(t)
+        slot_time = slot_datetime(t).time()
+        scheduled_start = datetime.combine(poll.poll_date, slot_time, tzinfo=timezone.utc)
         db.add(MeetingInstance(
             poll_id=poll.id,
             selected_slot_id=slot_by_time[t].id,
-            scheduled_start=st,
-            scheduled_end=st + timedelta(minutes=60),
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_start + timedelta(minutes=60),
             location="Онлайн (Meet)",
             status="scheduled",
         ))

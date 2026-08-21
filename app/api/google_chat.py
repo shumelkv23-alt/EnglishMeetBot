@@ -37,24 +37,6 @@ def _verify_chat_jwt(authorization: str) -> None:
     )
 
 
-def _extract_space_name(chat_data: dict) -> str:
-    """Имя пространства из события аддон-формата (несколько запасных путей).
-
-    В DM-событиях workspace-addon space обычно лежит в chat.space.
-    """
-    for candidate in (
-        chat_data.get("space", {}),
-        chat_data.get("messagePayload", {}).get("space", {}),
-        chat_data.get("buttonClickedPayload", {}).get("space", {}),
-        (chat_data.get("messagePayload", {}).get("message", {}) or {}),
-    ):
-        if isinstance(candidate, dict):
-            name = candidate.get("name")
-            if isinstance(name, str) and name.startswith("spaces/"):
-                return name
-    return ""
-
-
 def _space_is_dm(space: dict) -> bool:
     """True, если пространство — личная переписка (DM) с ботом, а не группа/комната.
 
@@ -64,6 +46,27 @@ def _space_is_dm(space: dict) -> bool:
     if not isinstance(space, dict):
         return False
     return space.get("type") == "DM" or space.get("spaceType") in ("DM", "DIRECT_MESSAGE")
+
+
+def _extract_space_dict(chat_data: dict) -> dict:
+    """Пространство события как dict (для _space_is_dm) или {}, если не найдено."""
+    for candidate in (
+        chat_data.get("space", {}),
+        chat_data.get("buttonClickedPayload", {}).get("space", {}),
+        chat_data.get("messagePayload", {}).get("space", {}),
+    ):
+        if isinstance(candidate, dict) and isinstance(candidate.get("name"), str):
+            return candidate
+    return {}
+
+
+def _dm_space_name(space: dict) -> str | None:
+    """Имя пространства, если это DM; иначе None (группу в chat_space_id не пишем)."""
+    if _space_is_dm(space):
+        name = space.get("name")
+        if isinstance(name, str) and name.startswith("spaces/"):
+            return name
+    return None
 
 
 async def _handle_checkin_present(chat_data: dict, common: dict) -> dict:
@@ -96,11 +99,12 @@ async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
     result = {"ok": False, "reason": "no_user"}
     if workspace_user_id:
         try:
+            space = _extract_space_dict(chat_data)
             async with AsyncSessionLocal() as db:
                 profile = await get_or_create_profile(
                     db, workspace_user_id=workspace_user_id,
                     email=user.get("email"), display_name=user.get("displayName"),
-                    chat_space_id=_extract_space_name(chat_data) or None,
+                    chat_space_id=_dm_space_name(space),
                 )
                 from app.services.weekly_poll import submit_poll
                 result = await submit_poll(db, profile, form_inputs)
@@ -131,11 +135,12 @@ async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
     result = {"ok": False, "reason": "no_user"}
     if workspace_user_id:
         try:
+            space = _extract_space_dict(chat_data)
             async with AsyncSessionLocal() as db:
                 profile = await get_or_create_profile(
                     db, workspace_user_id=workspace_user_id,
                     email=user.get("email"), display_name=user.get("displayName"),
-                    chat_space_id=_extract_space_name(chat_data) or None,
+                    chat_space_id=_dm_space_name(space),
                 )
                 from app.services.weekly_poll import submit_poll
                 result = await submit_poll(db, profile, form_inputs)
@@ -149,7 +154,7 @@ async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
     return {"text": "Не получилось сохранить — попробуй ещё раз."}
 
 
-async def _submit_onboarding(user: dict, space_name: str, form_inputs: dict) -> dict:
+async def _submit_onboarding(user: dict, space: dict, form_inputs: dict) -> dict:
     """Сохранить анкету онбординга и вернуть текстовое сообщение для пользователя."""
     workspace_user_id = user.get("name", "")
     if not workspace_user_id or not form_inputs:
@@ -163,7 +168,7 @@ async def _submit_onboarding(user: dict, space_name: str, form_inputs: dict) -> 
                 workspace_user_id=workspace_user_id,
                 email=user.get("email"),
                 display_name=user.get("displayName"),
-                chat_space_id=space_name or None,
+                chat_space_id=_dm_space_name(space),
             )
             answers = await save_onboarding_answers(db, profile, form_inputs)
             if not answers:
@@ -553,9 +558,9 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             method = _onboarding_action_method(common)
             if method == "submit_onboarding":
                 form_inputs = common.get("formInputs", {}) or {}
-                space_name = _extract_space_name(chat_data)
+                space = _extract_space_dict(chat_data)
                 user = chat_data.get("user", {})
-                response_msg = await _submit_onboarding(user, space_name, form_inputs)
+                response_msg = await _submit_onboarding(user, space, form_inputs)
                 return _addon_response(response_msg)
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
@@ -583,14 +588,14 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             workspace_user_id = user.get("name", "")
             if workspace_user_id:
                 try:
-                    space_name = _extract_space_name(chat_data)
+                    space = _extract_space_dict(chat_data)
                     async with AsyncSessionLocal() as db:
                         profile = await get_or_create_profile(
                             db,
                             workspace_user_id=workspace_user_id,
                             email=user.get("email"),
                             display_name=user.get("displayName"),
-                            chat_space_id=space_name or None,
+                            chat_space_id=_dm_space_name(space),
                         )
                         await save_answer(db, profile, ONBOARDING_QUESTION, raw_text)
                 except Exception:
@@ -615,9 +620,9 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         function_name = action.get("function") or action.get("functionName") or action.get("actionMethodName")
         if function_name == "submit_onboarding":
             form_inputs = chat_data.get("common", {}).get("formInputs", {})
-            space_name = _extract_space_name(chat_data)
+            space = _extract_space_dict(chat_data)
             user = chat_data.get("user", {})
-            response_msg = await _submit_onboarding(user, space_name, form_inputs)
+            response_msg = await _submit_onboarding(user, space, form_inputs)
             return _addon_response(response_msg)
 
         # Прочие события аддон-формата
@@ -658,29 +663,29 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         method = _action_method(action)
         if function_name == "submit_onboarding" or method == "submit_onboarding":
             user = event.get("user", {})
-            space_name = event.get("space", {}).get("name", "")
+            space = event.get("space", {})
             form_inputs = event.get("common", {}).get("formInputs", {})
-            response_msg = await _submit_onboarding(user, space_name, form_inputs)
+            response_msg = await _submit_onboarding(user, space, form_inputs)
             return _addon_response(response_msg)
         if function_name == "weekly_poll_submit" or method == "submit_weekly_poll":
             user = event.get("user", {})
-            space_name = event.get("space", {}).get("name", "")
+            space = event.get("space", {})
             form_inputs = event.get("common", {}).get("formInputs", {})
             response_msg = await _submit_weekly_poll(
-                {"user": user, "space": {"name": space_name}},
+                {"user": user, "space": space},
                 {"formInputs": form_inputs},
             )
             return _addon_response(response_msg)
         if function_name == "submit_daily_poll" or method == "submit_daily_poll":
             user = event.get("user", {})
-            space_name = event.get("space", {}).get("name", "")
+            space = event.get("space", {})
             params = {}
             for p in action.get("parameters") or []:
                 if isinstance(p, dict) and p.get("key"):
                     params[p.get("key")] = p.get("value")
             form_inputs = event.get("common", {}).get("formInputs", {})
             response_msg = await _submit_daily_poll(
-                {"user": user, "space": {"name": space_name}},
+                {"user": user, "space": space},
                 {"formInputs": form_inputs, "parameters": params},
             )
             return _addon_response(response_msg)
