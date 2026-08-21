@@ -132,7 +132,7 @@ class PollResponse(Base):
     __tablename__ = "poll_responses"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'responded', 'skipped')", name="valid_status"
+            "status IN ('pending', 'responded', 'not_available')", name="valid_status"
         ),
         CheckConstraint("reminder_count >= 0", name="valid_reminder_count"),
         CheckConstraint(
