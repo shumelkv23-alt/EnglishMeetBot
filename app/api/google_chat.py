@@ -453,10 +453,12 @@ async def _register_contact(chat_data: dict, space_name: str) -> None:
         logger.warning("added_to_space_without_user_name, db write skipped")
 
 
-async def _run_onboarding(space_name: str) -> dict:
+async def _run_onboarding(space_name: str, space: dict) -> dict:
     """Онбординг при добавлении в пространство: анкета в личку, @упоминание в группу.
 
-    Сохраняет space_id в config и через onboard_space_members планирует каналы:
+    space_id в config пишем ТОЛЬКО для группы/комнаты (не DM): джобы ежедневного
+    опроса и итогов должны слать в группу, а не в личку. В DM space_id не трогаем.
+    Через onboard_space_members планируем каналы:
       - plan["dm"] — уже есть DM с ботом и онбординг не пройден → анкета в личку;
       - plan["mention"] — нет DM → @упоминание в группу с просьбой написать боту.
     Возвращает план: {'dm': [...], 'mention': [...]}.
@@ -472,7 +474,9 @@ async def _run_onboarding(space_name: str) -> dict:
         return plan
     try:
         async with AsyncSessionLocal() as db:
-            await get_or_create_config(db, "space_id", space_name)
+            # config["space_id"] — id ГРУППЫ для джоб; DM-пространство не фиксируем
+            if not _space_is_dm(space):
+                await get_or_create_config(db, "space_id", space_name)
             plan = await onboard_space_members(db, space_name)
     except Exception:
         # Сбой планирования не должен ронять обработку события
@@ -621,11 +625,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
 
         # Бота добавили в пространство / открыли DM
         if "addedToSpacePayload" in chat_data:
-            space_name = chat_data["addedToSpacePayload"].get("space", {}).get("name", "")
+            space = chat_data["addedToSpacePayload"].get("space", {})
+            space_name = space.get("name", "")
             logger.info("event=ADDED_TO_SPACE format=addon user=%r space=%s", user_name, space_name)
             await _register_contact(chat_data, space_name)
             # Онбординг: анкета в личку / @упоминание в группу
-            await _run_onboarding(space_name)
+            await _run_onboarding(space_name, space)
             return JSONResponse(content={})
 
         # Нажали кнопку на карточке (submit анкеты онбординга)
@@ -648,10 +653,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
     if event_type == "ADDED_TO_SPACE":
         user_name = event.get("user", {}).get("displayName", "")
         logger.info("event=ADDED_TO_SPACE format=classic user=%s", user_name)
-        space_name = event.get("space", {}).get("name", "")
+        space = event.get("space", {})
+        space_name = space.get("name", "")
         await _register_contact(event, space_name)
         # Онбординг: анкета в личку / @упоминание в группу
-        await _run_onboarding(space_name)
+        await _run_onboarding(space_name, space)
         return JSONResponse(content={})
 
     if event_type == "MESSAGE":
