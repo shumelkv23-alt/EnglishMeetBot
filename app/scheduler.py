@@ -1,11 +1,14 @@
 # app/scheduler.py
-"""APScheduler: еженедельное создание опросов и ежедневное решение «на завтра».
+"""APScheduler: ежедневное голосование «в тот же день» (по будням).
 
 Джобы (время в config.app_tz, часы читаются из config-таблицы):
-  - пн 10:00  create_weekly_poll_and_broadcast — опрос текущей недели + карточки
-  - ежедневно 20:00  decide_tomorrow + finalize_expired_weeks
-При фиксации встречи ставится date-job напоминания за meeting_reminder_hours
-до начала. При старте приложения незакрытые напоминания восстанавливаются
+  - пн-пт 9:00   daily_invite    — опрос на сегодня + карточка «придёшь?» в DM
+  - пн-пт 13:00  daily_finalize  — слоты с кворумом -> встречи, анонс в группу,
+                                    расписание напоминаний за час
+  - пн-пт 18:00  daily_checkin   — отметить встречи completed, чек-ин в DM
+
+Напоминания ставятся одноразовой date-джобой за meeting_reminder_hours до
+начала встречи. При старте приложения незакрытые напоминания восстанавливаются
 из meeting_instances (иначе рестарт их бы потерял).
 """
 import logging
@@ -16,13 +19,14 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import MeetingInstance, WeeklyPoll
-from app.services.poll_logic import MeetingPlan, Slot, plan_week_messages
+from app.models import MeetingInstance
+from app.services.poll_logic import APP_TZ, MeetingPlan, Slot, plan_meeting_messages
 from app.services.poll_store import (
+    _attendee_ids_for_slot,
     config_value,
-    create_weekly_poll_and_broadcast,
-    decide_tomorrow,
-    finalize_expired_weeks,
+    create_daily_poll_and_broadcast,
+    finalize_today,
+    send_daily_checkins,
 )
 from app.timeutil import app_now
 
@@ -30,38 +34,34 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone=get_settings().app_tz)
 
-# config.poll_creation_day использует crontab-семантику (0=воскресенье),
-# APScheduler — имена дней; маппим явно, чтобы не зависеть от его нумерации
-_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 
-
-async def _job_create_weekly_poll() -> None:
-    """Пн 10:00 (config.app_tz): опрос текущей недели + рассылка карточек."""
+async def _job_daily_invite() -> None:
+    """Пн-пт 9:00 (config.app_tz): опрос дня + рассылка «придёшь сегодня?»."""
     async with AsyncSessionLocal() as db:
-        result = await create_weekly_poll_and_broadcast(db)
-    logger.info("job_create_weekly_poll done %s", result)
+        result = await create_daily_poll_and_broadcast(db)
+    logger.info("job_daily_invite done %s", result)
 
 
-async def _job_daily_decision() -> None:
-    """Ежедневно 20:00 (config.app_tz): решение по завтрашнему дню + финал истёкших недель."""
+async def _job_daily_finalize() -> None:
+    """Пн-пт 13:00 (config.app_tz): финализация + расписание напоминаний."""
     now = app_now()
     async with AsyncSessionLocal() as db:
-        outcome = await decide_tomorrow(db, now)
-        cancelled = await finalize_expired_weeks(db, now)
+        outcome = await finalize_today(db, now)
 
-    decision = outcome["decision"]
-    reminder = outcome["reminder"]
-    if decision is not None:
-        logger.info(
-            "job_daily_decision kind=%s day=%s voters=%s",
-            decision.kind,
-            str(decision.day),
-            decision.voters,
-        )
-    if reminder is not None:
+    for reminder in outcome["reminders"]:
         _schedule_reminder(reminder.send_at, list(reminder.recipients), reminder.text)
-    if cancelled:
-        logger.info("job_daily_decision cancelled_weeks=%s", cancelled)
+    logger.info(
+        "job_daily_finalize done meetings=%s reminders=%s",
+        len(outcome["meetings"]), len(outcome["reminders"]),
+    )
+
+
+async def _job_daily_checkin() -> None:
+    """Пн-пт 18:00 (config.app_tz): чек-ин участникам встреч дня."""
+    now = app_now()
+    async with AsyncSessionLocal() as db:
+        sent = await send_daily_checkins(db, now)
+    logger.info("job_daily_checkin done sent=%s", sent)
 
 
 # ---------------------------------------------------------------------
@@ -88,11 +88,7 @@ def _schedule_reminder(send_at: datetime, recipients: list[str], text: str) -> b
 
 
 async def _send_reminder_messages(recipients: list[str], text: str) -> None:
-    """Доставка REMINDER в DM получателям (из MessagePlan).
-
-    Корутина: AsyncIOScheduler выполняет её в главном event loop,
-    общий движок БД не трогается из чужих потоков.
-    """
+    """Доставка REMINDER в DM получателям."""
     from app.services.poll_store import _deliver_to_users, send_to_group
 
     delivered = await _deliver_to_users(tuple(recipients), text)
@@ -122,22 +118,17 @@ async def rebuild_pending_reminders() -> int:
                 continue
             slot = Slot(
                 slot_key=f"meeting-{m.id}",
-                day=m.scheduled_start.date(),
+                day=m.scheduled_start.astimezone(APP_TZ).date(),
                 start=m.scheduled_start,
                 end=m.scheduled_end,
                 location=m.location,
             )
-            # Фиктивный получатель: plan_week_messages при [] возвращает [],
-            # а здесь нужны только текст и время напоминания
-            plans = plan_week_messages(
-                MeetingPlan(day=m.scheduled_start.date(), slot=slot),
-                recipients=["__rebuild__"],
-                reminder_hours=reminder_hours,
-            )
+            plan = MeetingPlan(day=slot.day, slot=slot)
+            recipients = await _attendee_ids_for_slot(db, m.selected_slot_id)
+            plans = plan_meeting_messages(plan, recipients, reminder_hours)
             reminders = [p for p in plans if p.kind == "REMINDER"]
             if not reminders or reminders[0].send_at <= now:
                 continue
-            recipients = await _recipients_for_meeting(db, m.id)
             if _schedule_reminder(
                 reminders[0].send_at, recipients, reminders[0].text
             ):
@@ -147,23 +138,6 @@ async def rebuild_pending_reminders() -> int:
     return restored
 
 
-async def _recipients_for_meeting(db, meeting_id: int) -> list[str]:
-    """Проголосовавшие за слот зафиксированной встречи."""
-    from app.models import PollSlot, PollVote, Profile
-
-    rows = (
-        await db.execute(
-            select(Profile.workspace_user_id)
-            .join(PollVote, PollVote.profile_id == Profile.id)
-            .join(PollSlot, PollVote.poll_slot_id == PollSlot.id)
-            .join(MeetingInstance, MeetingInstance.selected_slot_id == PollSlot.id)
-            .where(MeetingInstance.id == meeting_id)
-            .distinct()
-        )
-    ).scalars().all()
-    return [r for r in rows if r]
-
-
 # ---------------------------------------------------------------------
 # Жизненный цикл
 # ---------------------------------------------------------------------
@@ -171,25 +145,35 @@ async def _recipients_for_meeting(db, meeting_id: int) -> list[str]:
 async def start_scheduler() -> None:
     """Настроить и запустить планировщик (вызов из lifespan)."""
     async with AsyncSessionLocal() as db:
-        creation_day = int(await config_value(db, "poll_creation_day", 0) or 0)
-        creation_hour = int(await config_value(db, "poll_creation_hour", 10) or 10)
-        creation_minute = int(await config_value(db, "poll_creation_minute", 0) or 0)
+        invite_hour = int(await config_value(db, "daily_poll_hour", 9) or 9)
+        close_hour = int(await config_value(db, "daily_poll_close_hour", 13) or 13)
+        checkin_hour = int(await config_value(db, "daily_checkin_hour", 18) or 18)
 
     scheduler.add_job(
-        _job_create_weekly_poll,
+        _job_daily_invite,
         trigger="cron",
-        day_of_week=_DOW_NAMES[creation_day % 7],
-        hour=creation_hour,
-        minute=creation_minute,
-        id="create_weekly_poll",
+        day_of_week="mon-fri",
+        hour=invite_hour,
+        minute=0,
+        id="daily_invite",
         replace_existing=True,
     )
     scheduler.add_job(
-        _job_daily_decision,
+        _job_daily_finalize,
         trigger="cron",
-        hour=20,
+        day_of_week="mon-fri",
+        hour=close_hour,
         minute=0,
-        id="daily_decision",
+        id="daily_finalize",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _job_daily_checkin,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=checkin_hour,
+        minute=0,
+        id="daily_checkin",
         replace_existing=True,
     )
 

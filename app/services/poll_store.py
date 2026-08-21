@@ -1,23 +1,25 @@
 # app/services/poll_store.py
-"""DB-слой еженедельного голосования: связывает чистую логику
+"""DB-слой ежедневного голосования «в тот же день»: связывает чистую логику
 poll_logic/poll_card с базой и отправкой.
 
 Здесь живёт ВСЁ, что требует БД/сети (сами poll_logic/poll_card остаются
-чистыми). Вызывающие слоты — вебхук (save_poll_vote) и планировщик
-(create_weekly_poll_and_broadcast / decide_tomorrow / finalize_expired_weeks).
+чистыми). Вызывающие слоты — вебхук (save_attendance_response / save_time_vote /
+record_checkin) и планировщик (create_daily_poll_and_broadcast / finalize_today /
+send_daily_checkins).
 
 Карта записи в БД — см. docstring app/services/poll_logic.py.
 """
 import logging
-from datetime import date, datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.timeutil import app_today
+from app.database import AsyncSessionLocal
+from app.timeutil import app_now, app_today
 from app.models import (
-    Answer,
+    Attendance,
     Config,
     MeetingInstance,
     PollResponse,
@@ -28,22 +30,22 @@ from app.models import (
 )
 from app.services import chat_sender
 from app.services.broadcast import ensure_profile_dm
-from app.services.poll_card import DEFAULT_THEME_QUESTIONS, build_poll_card
+from app.services.poll_card import (
+    build_attendance_card,
+    build_checkin_card,
+)
 from app.services.poll_logic import (
-    DEFAULT_ANNOUNCEMENT_HOUR,
-    MEETING,
-    NEED_MORE_VOTES,
-    RU_DAYS,
-    DayVotes,
+    APP_TZ,
+    DAILY_QUORUM_DEFAULT,
+    DEFAULT_REMINDER_HOURS,
     MeetingPlan,
     MessagePlan,
     Slot,
-    build_week_slots,
-    decide_for_tomorrow,
-    escalation_text,
-    plan_week_messages,
-    week_cancelled_text,
-    week_start_for,
+    build_announcement_text,
+    build_daily_slots,
+    finalize_slots,
+    plan_meeting_messages,
+    time_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,51 +64,42 @@ async def config_value(db: AsyncSession, key: str, default):
     return cfg.value
 
 
-def _week_end(week_start: date) -> datetime:
-    """Воскресенье 23:59 UTC недели week_start (voting_deadline по спеке)."""
-    return datetime.combine(
-        week_start + timedelta(days=6), dtime(23, 59), tzinfo=timezone.utc
-    )
-
-
-def _day_start(day: date) -> datetime:
-    return datetime.combine(day, dtime(0, 0), tzinfo=timezone.utc)
-
-
-def _day_end(day: date) -> datetime:
-    return _day_start(day + timedelta(days=1))
-
-
-def slot_key_for(day: date, start: datetime) -> str:
-    """Стабильный ключ слота — тот же формат, что в build_week_slots()."""
-    return f"{day.isoformat()}T{start.hour:02d}{start.minute:02d}"
+def _slot_key_for_start(start: datetime) -> str:
+    """Стабильный ключ слота в таймзоне бота — тот же формат, что build_daily_slots()."""
+    local = start.astimezone(APP_TZ)
+    return f"{local.date().isoformat()}T{local.hour:02d}{local.minute:02d}"
 
 
 # ---------------------------------------------------------------------
-# Создание опроса недели
+# Опрос дня (weekly_polls: week_start = дата дня)
 # ---------------------------------------------------------------------
 
-async def get_or_create_poll_for_week(db: AsyncSession, week_start: date) -> WeeklyPoll:
-    """Опрос на неделю week_start: создать с полным набором слотов или вернуть существующий.
+async def get_or_create_daily_poll(db: AsyncSession, day: date) -> WeeklyPoll | None:
+    """Опрос на день `day`: создать с 3 слотами или вернуть существующий.
 
-    Существующий опрос НЕ трогаем (голоса посреди недели стирать нельзя).
+    Возвращает None, если сейчас уже позже deadline (13:00) — опоздали,
+    опрос дня не создаём (иначе останется «висячий» активный опрос).
     """
     poll = (
-        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == week_start))
+        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == day))
     ).scalar_one_or_none()
 
     if poll is None:
+        close_hour = int(await config_value(db, "daily_poll_close_hour", 13) or 13)
+        deadline = datetime.combine(day, dtime(close_hour, 0), tzinfo=APP_TZ)
+        if app_now() >= deadline:
+            return None
+
         location = await config_value(db, "default_location", "")
         poll = WeeklyPoll(
-            week_start=week_start,
-            voting_deadline=_week_end(week_start),
+            week_start=day,
+            voting_deadline=deadline,
             status="active",
         )
         db.add(poll)
         await db.flush()  # нужен poll.id для слотов
 
-        slots = build_week_slots(week_start, location=str(location or ""))
-        for s in slots:
+        for s in build_daily_slots(day, location=str(location or "")):
             db.add(
                 PollSlot(
                     poll_id=poll.id,
@@ -118,160 +111,99 @@ async def get_or_create_poll_for_week(db: AsyncSession, week_start: date) -> Wee
             )
         await db.commit()
         await db.refresh(poll)
-        logger.info("weekly_poll_created week_start=%s slots=%s", str(week_start), len(slots))
+        logger.info("daily_poll_created day=%s slots=3", str(day))
     return poll
 
 
-async def current_or_next_poll(db: AsyncSession, today: date) -> WeeklyPoll | None:
-    """Активный опрос ближайшей недели: текущей или следующей."""
-    this_week = week_start_for(today)
-    poll = (
-        await db.execute(
-            select(WeeklyPoll)
-            .where(
-                WeeklyPoll.status == "active",
-                WeeklyPoll.week_start >= this_week,
-            )
-            .order_by(WeeklyPoll.week_start)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return poll
+def _poll_is_open(poll: WeeklyPoll | None) -> bool:
+    """Опрос активен и ещё идёт голосование (до 13:00)."""
+    return (
+        poll is not None
+        and poll.status == "active"
+        and app_now() < poll.voting_deadline
+    )
 
 
-async def create_weekly_poll_and_broadcast(db: AsyncSession) -> dict:
-    """Понедельничный сценарий: опрос ТЕКУЩЕЙ недели + карточка всем, кто писал боту.
+async def create_daily_poll_and_broadcast(db: AsyncSession) -> dict:
+    """Утренний сценарий (пн-пт 9:00): опрос на сегодня + карточка «придёшь?» всем.
 
-    Карточка идёт в DM каждому участнику и (если настроена) в общую группу.
-    Возвращает сводку {week_start, created, sent, skipped}.
+    Карточка идёт в DM каждому активному участнику. Возвращает сводку.
     """
-    this_week = week_start_for(app_today())
-    quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
+    today = app_today()
+    poll = await get_or_create_daily_poll(db, today)
+    if poll is None:
+        logger.warning("daily_poll_skipped_late day=%s", str(today))
+        return {"day": str(today), "created": False, "sent": 0, "skipped": 0}
 
-    existing = (
-        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == this_week))
-    ).scalar_one_or_none()
-    created = existing is None
+    profiles = (
+        await db.execute(select(Profile).where(Profile.is_active.is_(True)))
+    ).scalars().all()
 
-    poll = await get_or_create_poll_for_week(db, this_week)
-
-    card = build_poll_card(
-        week_start=poll.week_start, quorum=quorum, min_day=app_today()
-    )["cardsV2"]
-
-    profiles = (await db.execute(select(Profile))).scalars().all()
     sent, skipped = 0, 0
     for profile in profiles:
         if not await ensure_profile_dm(db, profile):
             skipped += 1
             continue
+        card = build_attendance_card(profile.user_name or "друг")["cardsV2"]
         try:
             chat_sender.send_card(profile.chat_space_id, card)
             sent += 1
         except Exception:
-            logger.exception("poll_card_send_failed profile_id=%s", profile.id)
+            logger.exception("attendance_card_send_failed profile_id=%s", profile.id)
             skipped += 1
 
-    # Дублируем карточку в общую группу (если настроена)
-    send_card_to_group(card)
-
-    logger.info(
-        "weekly_poll_broadcast week=%s created=%s sent=%s skipped=%s",
-        str(this_week), created, sent, skipped,
-    )
-    return {"week_start": str(this_week), "created": created, "sent": sent, "skipped": skipped}
+    logger.info("daily_poll_broadcast day=%s sent=%s skipped=%s", str(today), sent, skipped)
+    return {"day": str(today), "created": True, "sent": sent, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------
-# Парсинг формы голосования (чистая функция — покрыта тестами)
+# Парсинг формы выбора времени (чистая функция — покрыта тестами)
 # ---------------------------------------------------------------------
 
-def parse_poll_form(form_inputs: dict) -> tuple[list[date], list[str]]:
-    """formInputs клика «Забронировать день» -> (выбранные даты, ответы на темы).
+def parse_time_form(form_inputs: dict) -> str:
+    """formInputs клика «Записаться» -> выбранный slot_key (или "").
 
     Понимает оба формата Google:
-      классический {"days": {"stringInputs": {"value": [...]}}}
-      add-on        {"days": {"": {"stringInputs": {"value": [...]}}}}
-    Даты без валидного ISO-формата молча отбрасываются.
-    Темы — список из ДВУХ строк, выровненный по вопросам
-    (q_theme1, q_theme2); неотвеченный вопрос — пустая строка.
+      классический {"time": {"stringInputs": {"value": ["2026-08-21T1500"]}}}
+      add-on        {"time": {"": {"stringInputs": {"value": ["2026-08-21T1500"]}}}}
     """
-    def values_of(name: str) -> list[str]:
-        field = form_inputs.get(name)
-        if not isinstance(field, dict):
-            return []
-        payload = field.get("stringInputs") or field.get("")
-        # add-on: под ключом "" лежит ещё одна обёртка stringInputs
-        if isinstance(payload, dict) and "stringInputs" in payload:
-            payload = payload["stringInputs"]
-        if not isinstance(payload, dict):
-            return []
-        raw = payload.get("value", [])
-        return [v.strip() for v in raw if isinstance(v, str) and v.strip()]
-
-    def single_of(name: str) -> str:
-        vals = values_of(name)
-        return vals[0] if vals else ""
-
-    days: list[date] = []
-    seen: set[date] = set()
-    for raw in values_of("days"):
-        try:
-            d = date.fromisoformat(raw)
-        except ValueError:
-            continue
-        if d not in seen:
-            seen.add(d)
-            days.append(d)
-
-    themes = [single_of("q_theme1"), single_of("q_theme2")]
-    return days, themes
+    field = form_inputs.get("time")
+    if not isinstance(field, dict):
+        return ""
+    payload = field.get("stringInputs") or field.get("")
+    if isinstance(payload, dict) and "stringInputs" in payload:
+        payload = payload["stringInputs"]
+    if not isinstance(payload, dict):
+        return ""
+    raw = payload.get("value", [])
+    for v in raw:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
 
 
 # ---------------------------------------------------------------------
-# Приём голоса (вебхук)
+# Приём ответа «да/нет» и выбора времени (вебхук)
 # ---------------------------------------------------------------------
 
-async def save_poll_vote(db: AsyncSession, profile: Profile, form_inputs: dict) -> str:
-    """Сохранить голос участника и вернуть текст подтверждения для DM.
+async def save_attendance_response(
+    db: AsyncSession, profile: Profile, will_attend: bool
+) -> tuple[str, bool]:
+    """Сохранить ответ «придёшь сегодня?» и вернуть (текст, показать_карточку_времени).
 
-    - poll_responses: upsert по (profile_id, poll_id), status='responded'
-    - poll_votes: ПЕРЕЗАПИСЬ голосов этого участника в рамках опроса
-    - answers: ответы на тематические вопросы (append-only)
-    Счётчики votes_count пересчитывают триггеры БД.
+    will_attend=True  -> (пустой текст, True) — вебхук покажет карточку выбора времени.
+    will_attend=False -> (текст «ок, жаль», False).
+    Ошибка/закрыто     -> (текст ошибки, False).
     """
-    days, themes = parse_poll_form(form_inputs)
-    if not days:
+    poll = await get_or_create_daily_poll(db, app_today())
+    if not _poll_is_open(poll):
         return (
-            "Не вижу выбранных дней 🤔 Отметь хотя бы один день "
-            "в карточке и нажми кнопку ещё раз."
+            "Голосование уже закрыто — встречи на сегодня определяются в 13:00. "
+            "Приходи завтра! 🙌",
+            False,
         )
 
-    # Запрет голосовать за прошедшие дни (по таймзоне бота)
-    today = app_today()
-    days = [d for d in days if d >= today]
-    if not days:
-        return (
-            "Нельзя голосовать за прошедшие дни 🙅 "
-            "Выбери день начиная с сегодняшнего."
-        )
-
-    week = week_start_for(days[0])
-    poll = (
-        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == week))
-    ).scalar_one_or_none()
-    if poll is None or poll.status != "active":
-        return (
-            "Опрос на эту неделю не найден или уже закрыт. "
-            "Напиши «голосование», чтобы получить актуальную карточку."
-        )
-
-    slots = (
-        await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))
-    ).scalars().all()
-    slot_by_day = {s.slot_start.date(): s for s in slots}
-
-    # 1. upsert poll_responses (UNIQUE profile_id + poll_id)
+    now = datetime.now(APP_TZ)
     response = (
         await db.execute(
             select(PollResponse).where(
@@ -280,22 +212,84 @@ async def save_poll_vote(db: AsyncSession, profile: Profile, form_inputs: dict) 
             )
         )
     ).scalar_one_or_none()
-    now = datetime.now(timezone.utc)
     if response is None:
         response = PollResponse(
             profile_id=profile.id,
             poll_id=poll.id,
             status="responded",
             responded_at=now,
+            will_attend=will_attend,
+        )
+        db.add(response)
+    else:
+        response.status = "responded"
+        response.responded_at = now
+        response.will_attend = will_attend
+    await db.commit()
+
+    logger.info(
+        "attendance_response_saved profile_id=%s will_attend=%s",
+        profile.id, will_attend,
+    )
+    if will_attend:
+        return "", True
+    return "Ок, жаль, что сегодня не сможешь 🙌 Заглянем завтра!", False
+
+
+async def save_time_vote(db: AsyncSession, profile: Profile, slot_key: str) -> str:
+    """Сохранить выбранное время (один слот) и вернуть текст подтверждения.
+
+    ПЕРЕЗАПИСЬ голоса участника в этом опросе: старые poll_votes удаляются,
+    вставляется одна строка за выбранный слот. Счётчик votes_count пересчитает
+    триггер БД.
+    """
+    if not slot_key:
+        return "Не вижу выбранное время 🤔 Отметь слот и нажми «Записаться» ещё раз."
+
+    poll = await get_or_create_daily_poll(db, app_today())
+    if not _poll_is_open(poll):
+        return (
+            "Голосование уже закрыто — встречи на сегодня определяются в 13:00. "
+            "Приходи завтра! 🙌"
+        )
+
+    slot_rows = (
+        await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))
+    ).scalars().all()
+    target = next(
+        (s for s in slot_rows if _slot_key_for_start(s.slot_start) == slot_key),
+        None,
+    )
+    if target is None:
+        return "Не нашёл такой слот времени — попробуй ещё раз 🤔"
+
+    # upsert poll_responses (на случай, если участник сразу выбрал время без «да»)
+    response = (
+        await db.execute(
+            select(PollResponse).where(
+                PollResponse.profile_id == profile.id,
+                PollResponse.poll_id == poll.id,
+            )
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(APP_TZ)
+    if response is None:
+        response = PollResponse(
+            profile_id=profile.id,
+            poll_id=poll.id,
+            status="responded",
+            responded_at=now,
+            will_attend=True,
         )
         db.add(response)
         await db.flush()
     else:
         response.status = "responded"
         response.responded_at = now
+        response.will_attend = True
 
-    # 2. перезапись голосов участника в этом опросе (повторное голосование)
-    old_slot_ids = [s.id for s in slots]
+    # перезапись голоса участника в этом опросе (одна строка)
+    old_slot_ids = [s.id for s in slot_rows]
     if old_slot_ids:
         await db.execute(
             delete(PollVote).where(
@@ -303,114 +297,266 @@ async def save_poll_vote(db: AsyncSession, profile: Profile, form_inputs: dict) 
                 PollVote.poll_slot_id.in_(old_slot_ids),
             )
         )
-
-    chosen_days: list[date] = []
-    for day in days:
-        slot = slot_by_day.get(day)
-        if slot is None:
-            continue
-        db.add(
-            PollVote(
-                poll_response_id=response.id,
-                profile_id=profile.id,
-                poll_slot_id=slot.id,
-                voted_at=now,
-            )
+    db.add(
+        PollVote(
+            poll_response_id=response.id,
+            profile_id=profile.id,
+            poll_slot_id=target.id,
+            voted_at=now,
         )
-        chosen_days.append(day)
-
-    # 3. тематические ответы -> answers (append-only история)
-    for question_text, answer_text in zip(DEFAULT_THEME_QUESTIONS, themes):
-        if not answer_text:
-            continue
-        db.add(
-            Answer(
-                profile_id=profile.id,
-                question_text=question_text,
-                answer_text=answer_text,
-                is_public=profile.public_consent,
-                week_start=poll.week_start,
-            )
-        )
-
+    )
     await db.commit()
 
-    labels = ", ".join(RU_DAYS[d.weekday()] for d in sorted(chosen_days))
-    logger.info(
-        "poll_vote_saved profile_id=%s poll_id=%s days=%s themes=%s",
-        profile.id, poll.id, [str(d) for d in chosen_days], len(themes),
+    label = time_label(
+        Slot(
+            slot_key=slot_key,
+            day=target.slot_start.astimezone(APP_TZ).date(),
+            start=target.slot_start,
+            end=target.slot_end,
+            location=target.location,
+        )
     )
-    if not chosen_days:
-        return "Дни из карточки не совпали со слотами опроса — попробуй ещё раз."
+    logger.info("time_vote_saved profile_id=%s slot=%s", profile.id, slot_key)
     return (
-        f"Голос учтён ✅ Ты выбрал(а): {labels} в 13:00–14:00.\n"
-        "Встреча назначится на ПЕРВЫЙ день, когда наберётся кворум. "
-        "Можно проголосовать заново в любой момент — новые дни заменят старые."
+        f"Записал(а) тебя на {label} ✅\n"
+        "Если встреча соберётся, придёт анонс в группу и напоминание за час."
     )
 
 
 # ---------------------------------------------------------------------
-# Ежедневное решение «на завтра»
+# Финализация (13:00): слоты с кворумом -> встречи (до 3 групп)
 # ---------------------------------------------------------------------
 
-async def _day_votes_for(db: AsyncSession, poll: WeeklyPoll, day: date) -> DayVotes | None:
-    """Итоги голосования по конкретному дню опроса (poll_votes JOIN poll_slots)."""
-    rows = (
-        await db.execute(
-            select(PollSlot, PollVote.profile_id)
-            .join(PollVote, PollVote.poll_slot_id == PollSlot.id)
-            .where(
-                PollSlot.poll_id == poll.id,
-                PollSlot.slot_start >= _day_start(day),
-                PollSlot.slot_start < _day_end(day),
-            )
-        )
-    ).all()
-    if not rows:
-        return None
-
-    votes_by_slot: dict[int, set[int]] = {}
-    slot_by_id: dict[int, PollSlot] = {}
-    for slot, profile_id in rows:
-        slot_by_id[slot.id] = slot
-        votes_by_slot.setdefault(slot.id, set()).add(profile_id)
-
-    voters: set[int] = set()
-    slots: list[Slot] = []
-    for slot_id, slot in slot_by_id.items():
-        count = len(votes_by_slot.get(slot_id, set()))
-        voters.update(votes_by_slot.get(slot_id, set()))
-        slots.append(
-            Slot(
-                slot_key=slot_key_for(day, slot.slot_start),
-                day=day,
-                start=slot.slot_start,
-                end=slot.slot_end,
-                votes=count,
-                location=slot.location,
-            )
-        )
-
-    return DayVotes(day=day, voters=len(voters), slots=tuple(slots))
-
-
-async def _recipients_for_day(db: AsyncSession, poll: WeeklyPoll, day: date) -> list[str]:
-    """workspace_user_id всех, кто голосовал за день (для анонса/напоминания)."""
+async def _attendee_ids_for_slot(db: AsyncSession, slot_id: int) -> list[str]:
+    """workspace_user_id всех, кто проголосовал за слот."""
     rows = (
         await db.execute(
             select(Profile.workspace_user_id)
             .join(PollVote, PollVote.profile_id == Profile.id)
-            .join(PollSlot, PollVote.poll_slot_id == PollSlot.id)
-            .where(
-                PollSlot.poll_id == poll.id,
-                PollSlot.slot_start >= _day_start(day),
-                PollSlot.slot_start < _day_end(day),
-            )
+            .where(PollVote.poll_slot_id == slot_id)
             .distinct()
         )
     ).scalars().all()
     return [r for r in rows if r]
 
+
+async def finalize_today(db: AsyncSession, now: datetime) -> dict:
+    """Финализация сегодняшнего опроса (13:00 по таймзоне бота).
+
+    Каждый слот с голосами >= quorum -> отдельная встреча (до 3 в день).
+    Анонс уходит в группу, напоминание за час планируется планировщиком.
+    Кворума нет нигде -> тихо, никому не пишем (опрос просто закрывается).
+
+    Возвращает {'meetings': [MeetingInstance], 'reminders': [MessagePlan]}.
+    """
+    today = now.date()
+    poll = (
+        await db.execute(
+            select(WeeklyPoll).where(
+                WeeklyPoll.week_start == today,
+                WeeklyPoll.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if poll is None:
+        return {"meetings": [], "reminders": []}
+
+    quorum = int(await config_value(db, "quorum_threshold", DAILY_QUORUM_DEFAULT) or DAILY_QUORUM_DEFAULT)
+    reminder_hours = int(await config_value(db, "meeting_reminder_hours", DEFAULT_REMINDER_HOURS) or DEFAULT_REMINDER_HOURS)
+
+    slot_rows = (
+        await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))
+    ).scalars().all()
+
+    slots: list[Slot] = []
+    row_by_key: dict[str, PollSlot] = {}
+    for row in slot_rows:
+        key = _slot_key_for_start(row.slot_start)
+        slots.append(
+            Slot(
+                slot_key=key,
+                day=row.slot_start.astimezone(APP_TZ).date(),
+                start=row.slot_start,
+                end=row.slot_end,
+                votes=row.votes_count,
+                location=row.location,
+            )
+        )
+        row_by_key[key] = row
+
+    winners = finalize_slots(slots, quorum)
+
+    meetings: list[MeetingInstance] = []
+    reminders: list[MessagePlan] = []
+    for plan in winners:
+        slot_row = row_by_key[plan.slot.slot_key]
+        meeting = MeetingInstance(
+            poll_id=poll.id,
+            selected_slot_id=slot_row.id,
+            scheduled_start=slot_row.slot_start,
+            scheduled_end=slot_row.slot_end,
+            location=slot_row.location,
+            status="scheduled",
+        )
+        db.add(meeting)
+        await db.flush()  # нужен meeting.id для активности/получателей
+        await db.refresh(meeting)
+
+        # Активность/тема — логика Кирилла (app/services/activity.py).
+        from app.services.activity import pick_activity
+
+        activity = await pick_activity(db, meeting) or ""
+
+        recipient_ids = await _attendee_ids_for_slot(db, slot_row.id)
+        announcement = build_announcement_text(plan, activity)
+        send_to_group(announcement)
+
+        for rp in plan_meeting_messages(plan, recipient_ids, reminder_hours):
+            reminders.append(rp)
+
+        logger.info(
+            "meeting_fixed meeting_id=%s slot=%s voters=%s recipients=%s",
+            meeting.id, plan.slot.slot_key, plan.slot.votes, len(recipient_ids),
+        )
+        meetings.append(meeting)
+
+    poll.status = "closed"
+    poll.closed_at = now
+    await db.commit()
+
+    logger.info(
+        "daily_finalize done day=%s meetings=%s",
+        str(today), len(meetings),
+    )
+    return {"meetings": meetings, "reminders": reminders}
+
+
+# ---------------------------------------------------------------------
+# Чек-ин (18:00, конец дня)
+# ---------------------------------------------------------------------
+
+async def send_daily_checkins(db: AsyncSession, now: datetime) -> int:
+    """Конец дня (18:00): отметить встречи completed и разослать чек-ин участникам.
+
+    Чек-ин уходит в DM каждому, кто проголосовал за слот состоявшейся встречи.
+    Возвращает число отправленных чек-инов.
+    """
+    today = now.date()
+    meetings = (
+        await db.execute(
+            select(MeetingInstance).where(
+                MeetingInstance.poll_id.in_(
+                    select(WeeklyPoll.id).where(WeeklyPoll.week_start == today)
+                ),
+                MeetingInstance.status == "scheduled",
+            )
+        )
+    ).scalars().all()
+
+    sent = 0
+    for meeting in meetings:
+        attendee_ids = await _attendee_ids_for_slot(db, meeting.selected_slot_id)
+        label = time_label(
+            Slot(
+                slot_key=meeting.id,
+                day=meeting.scheduled_start.astimezone(APP_TZ).date(),
+                start=meeting.scheduled_start,
+                end=meeting.scheduled_end,
+                location=meeting.location,
+            )
+        )
+        for user_id in attendee_ids:
+            space = await _dm_space_for_user(user_id)
+            if not space:
+                continue
+            try:
+                chat_sender.send_card(
+                    space, build_checkin_card("друг", label)["cardsV2"]
+                )
+                sent += 1
+            except Exception:
+                logger.exception("checkin_send_failed user=%s", user_id)
+
+        meeting.status = "completed"
+        meeting.completed_at = now
+
+    if meetings:
+        await db.commit()
+    logger.info("daily_checkins done day=%s sent=%s meetings=%s", str(today), sent, len(meetings))
+    return sent
+
+
+async def record_checkin(db: AsyncSession, profile: Profile, present: bool) -> str:
+    """Сохранить чек-ин «был/нет» и вернуть текст подтверждения.
+
+    Записывает attendance (source='self_checkin', status present/absent).
+    Баллы (leaderboard_ledger) сознательно НЕ трогаем — это отдельный этап.
+    """
+    today = app_today()
+    poll = (
+        await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == today))
+    ).scalar_one_or_none()
+    if poll is None:
+        return "Не нашёл сегодняшнюю встречу — чек-ин не сохранён 🤔"
+
+    meeting = None
+    meetings = (
+        await db.execute(select(MeetingInstance).where(MeetingInstance.poll_id == poll.id))
+    ).scalars().all()
+    for m in meetings:
+        vote = (
+            await db.execute(
+                select(PollVote).where(
+                    PollVote.poll_slot_id == m.selected_slot_id,
+                    PollVote.profile_id == profile.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if vote is not None:
+            meeting = m
+            break
+
+    if meeting is None:
+        return "Ты не числился(лась) участником сегодняшней встречи — пропускаю."
+
+    now = datetime.now(APP_TZ)
+    attendance = (
+        await db.execute(
+            select(Attendance).where(
+                Attendance.profile_id == profile.id,
+                Attendance.meeting_instance_id == meeting.id,
+            )
+        )
+    ).scalar_one_or_none()
+    status = "present" if present else "absent"
+    if attendance is None:
+        attendance = Attendance(
+            profile_id=profile.id,
+            meeting_instance_id=meeting.id,
+            source="self_checkin",
+            status=status,
+            checkin_attempted_at=now,
+            is_within_window=True,
+        )
+        db.add(attendance)
+    else:
+        attendance.status = status
+        attendance.checkin_attempted_at = now
+        attendance.is_within_window = True
+    await db.commit()
+
+    logger.info(
+        "checkin_recorded profile_id=%s meeting_id=%s status=%s",
+        profile.id, meeting.id, status,
+    )
+    if present:
+        return "Отлично, отметили, что ты был(а) ✅ Спасибо!"
+    return "Жаль, что не получилось 🙁 Отметили. До завтра!"
+
+
+# ---------------------------------------------------------------------
+# Отправка в DM / группу (общие помощники)
+# ---------------------------------------------------------------------
 
 async def _dm_space_for_user(user_id: str) -> str:
     """chat_space_id профиля; при отсутствии — поиск через Chat API."""
@@ -427,15 +573,8 @@ async def _dm_space_for_user(user_id: str) -> str:
         return profile.chat_space_id or ""
 
 
-from app.database import AsyncSessionLocal  # noqa: E402
-
-
 async def _deliver_to_users(recipient_ids: tuple[str, ...], text: str) -> int:
-    """Доставить текст в DM каждому получателю. Возвращает число доставок.
-
-    Полностью async: вызывается из вебхука и async-джоб планировщика,
-    поэтому общий движок БД всегда используется из своего event loop.
-    """
+    """Доставить текст в DM каждому получателю. Возвращает число доставок."""
     delivered = 0
     for user_id in recipient_ids:
         try:
@@ -454,108 +593,6 @@ async def _deliver_to_users(recipient_ids: tuple[str, ...], text: str) -> int:
     return delivered
 
 
-async def _announce_and_plan_reminder(
-    meeting_plan: MeetingPlan, recipient_ids: list[str], reminder_hours: int
-) -> MessagePlan | None:
-    """Отправить ANNOUNCEMENT сразу (решение принимаем в 20:00 вечера накануне),
-    вернуть REMINDER-план планировщику."""
-    plans = plan_week_messages(
-        meeting_plan,
-        recipients=recipient_ids,
-        announcement_hour=DEFAULT_ANNOUNCEMENT_HOUR,
-        reminder_hours=reminder_hours,
-    )
-    for plan in plans:
-        if plan.kind == "ANNOUNCEMENT":
-            delivered = await _deliver_to_users(plan.recipients, plan.text)
-            send_to_group(plan.text)
-            logger.info("announcement_sent delivered=%s", delivered)
-    reminders = [p for p in plans if p.kind == "REMINDER"]
-    return reminders[0] if reminders else None
-
-
-async def decide_tomorrow(db: AsyncSession, now: datetime) -> dict:
-    """Ежедневная проверка в 20:00 (по таймзоне бота): хватает ли голосов на завтрашний день.
-
-    Возвращает {'decision': Decision|None, 'reminder': MessagePlan|None}.
-    MEETING   -> создаёт meeting_instances, закрывает опрос, шлёт анонс
-                 проголосовавшим, reminder отдаёт планировщику.
-    NEED_MORE_VOTES -> эскалация в chat_test_space.
-    Активного опроса на завтра нет -> {'decision': None, 'reminder': None}.
-    """
-    tomorrow = (now + timedelta(days=1)).date()
-    poll = (
-        await db.execute(
-            select(WeeklyPoll).where(
-                WeeklyPoll.status == "active",
-                WeeklyPoll.week_start <= tomorrow,
-                WeeklyPoll.week_start >= tomorrow - timedelta(days=6),
-            )
-        )
-    ).scalar_one_or_none()
-    if poll is None:
-        return {"decision": None, "reminder": None}
-
-    day_votes = await _day_votes_for(db, poll, tomorrow)
-    quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
-    decision = decide_for_tomorrow(day_votes, quorum)
-
-    if decision.kind == MEETING and decision.meeting is not None:
-        slot = decision.meeting.slot
-        slot_row = (
-            await db.execute(
-                select(PollSlot).where(
-                    PollSlot.poll_id == poll.id,
-                    PollSlot.slot_start == slot.start,
-                )
-            )
-        ).scalar_one()
-
-        meeting = MeetingInstance(
-            poll_id=poll.id,
-            selected_slot_id=slot_row.id,
-            scheduled_start=slot_row.slot_start,
-            scheduled_end=slot_row.slot_end,
-            location=slot_row.location,
-            status="scheduled",
-        )
-        db.add(meeting)
-        poll.status = "closed"
-        poll.closed_at = now
-        await db.commit()
-        await db.refresh(meeting)
-
-        recipients = await _recipients_for_day(db, poll, tomorrow)
-        reminder_hours = int(await config_value(db, "meeting_reminder_hours", 1) or 1)
-        reminder = await _announce_and_plan_reminder(
-            decision.meeting, recipients, reminder_hours
-        )
-        logger.info(
-            "meeting_fixed meeting_id=%s day=%s voters=%s recipients=%s",
-            meeting.id, str(tomorrow), decision.voters, len(recipients),
-        )
-        return {"decision": decision, "reminder": reminder}
-
-    if decision.kind == NEED_MORE_VOTES:
-        send_escalation(escalation_text(decision.day, decision.voters, decision.quorum))
-
-    return {"decision": decision, "reminder": None}
-
-
-def send_escalation(text: str) -> bool:
-    """Эскалация организатору — в settings.chat_test_space."""
-    space = get_settings().chat_test_space
-    if not space:
-        logger.warning("escalation_skipped_no_space text=%r", text[:80])
-        return False
-    try:
-        chat_sender.send_text(space, text)
-        return True
-    except Exception:
-        logger.exception("escalation_send_failed")
-        return False
-
-
 def send_to_group(text: str) -> bool:
     """Отправить текст в общую группу (settings.chat_group_space).
 
@@ -570,46 +607,3 @@ def send_to_group(text: str) -> bool:
     except Exception:
         logger.exception("group_send_failed")
         return False
-
-
-def send_card_to_group(cards_v2: list[dict]) -> bool:
-    """Отправить карточку в общую группу. False — группа не настроена/ошибка."""
-    space = get_settings().chat_group_space
-    if not space:
-        return False
-    try:
-        chat_sender.send_card(space, cards_v2)
-        return True
-    except Exception:
-        logger.exception("group_card_send_failed")
-        return False
-
-
-# ---------------------------------------------------------------------
-# Финал недели: никто не набрал кворум
-# ---------------------------------------------------------------------
-
-async def finalize_expired_weeks(db: AsyncSession, now: datetime) -> int:
-    """Активные опросы, чья неделя уже закончилась, закрыть как cancelled
-    с финальной эскалацией. Возвращает число закрытых."""
-    today = now.date()
-    expired = (
-        await db.execute(
-            select(WeeklyPoll).where(
-                WeeklyPoll.status == "active",
-                WeeklyPoll.week_start + timedelta(days=6) < today,
-            )
-        )
-    ).scalars().all()
-
-    closed = 0
-    for poll in expired:
-        quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
-        poll.status = "cancelled"
-        closed += 1
-        send_escalation(week_cancelled_text(quorum))
-        logger.info("weekly_poll_cancelled week_start=%s", str(poll.week_start))
-
-    if closed:
-        await db.commit()
-    return closed

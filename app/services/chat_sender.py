@@ -50,7 +50,7 @@ def send_card(space_name: str, cards_v2: list[dict]) -> dict:
     """Отправить сообщение с карточкой (Cards V2) от имени бота.
 
     cards_v2 — список карточек, как в ответе вебхука
-    (например build_poll_card()['cardsV2']).
+    (например build_attendance_card()['cardsV2']).
     """
     creds = _bot_credentials()
     resp = requests.post(

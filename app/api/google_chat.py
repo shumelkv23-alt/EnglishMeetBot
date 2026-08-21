@@ -13,13 +13,14 @@ from app.services.onboarding import (
     save_answer,
 )
 from app.services.onboarding_answers import save_onboarding_answers
-from app.services.poll_logic import week_start_for
 from app.services.poll_store import (
-    get_or_create_poll_for_week,
-    parse_poll_form,
-    save_poll_vote,
+    get_or_create_daily_poll,
+    parse_time_form,
+    record_checkin,
+    save_attendance_response,
+    save_time_vote,
 )
-from app.services.poll_card import build_poll_card
+from app.services.poll_card import build_attendance_card, build_time_card
 from app.timeutil import app_today
 
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
@@ -97,18 +98,34 @@ def _is_onboarding_command(raw_text: str) -> bool:
 
 
 def _is_poll_command(raw_text: str) -> bool:
-    """Пользователь просит карточку недельного голосования."""
+    """Пользователь просит карточку ежедневного голосования «придёшь сегодня?»."""
     return "голосование" in raw_text.lower()
 
 
-async def _submit_poll_vote(user: dict, form_inputs: dict, space_name: str = "") -> dict:
-    """Сохранить голос недельного опроса и вернуть текст-подтверждение."""
+async def _attendance_card_for_user(user_name: str) -> dict:
+    """Карточка «придёшь сегодня?» на сегодня (создаёт опрос дня, если нужно)."""
+    today = app_today()
+    try:
+        async with AsyncSessionLocal() as db:
+            poll = await get_or_create_daily_poll(db, today)
+    except Exception:
+        logger.exception("attendance_card_lookup_failed")
+        poll = None
+    if poll is None or poll.status != "active":
+        return {
+            "text": "Сегодня голосование уже закрыто — встречи определяются в 13:00. "
+            "Приходи завтра в 9:00! 🙌"
+        }
+    return build_attendance_card(user_name)
+
+
+async def _handle_attendance(
+    user: dict, will_attend: bool, user_name: str, space_name: str = ""
+) -> dict:
+    """Сохранить ответ «да/нет»; на «да» — показать карточку выбора времени."""
     workspace_user_id = user.get("name", "")
     if not workspace_user_id:
-        return {"text": "Не удалось определить пользователя — голос не сохранён."}
-    days, _themes = parse_poll_form(form_inputs)
-    if not days:
-        return {"text": "Отметь хотя бы один день в карточке и нажми кнопку ещё раз 🗓"}
+        return {"text": "Не удалось определить пользователя — ответ не сохранён."}
     try:
         async with AsyncSessionLocal() as db:
             profile = await get_or_create_profile(
@@ -118,31 +135,62 @@ async def _submit_poll_vote(user: dict, form_inputs: dict, space_name: str = "")
                 display_name=user.get("displayName"),
                 chat_space_id=space_name or None,
             )
-            confirmation = await save_poll_vote(db, profile, form_inputs)
+            text, show_time = await save_attendance_response(db, profile, will_attend)
     except Exception:
-        logger.exception("poll_vote_save_failed")
+        logger.exception("attendance_save_failed")
+        return {"text": "Не удалось сохранить ответ. Попробуй ещё раз 🤞"}
+    if show_time:
+        return build_time_card(user_name, app_today())
+    return {"text": text}
+
+
+async def _handle_time_vote(
+    user: dict, form_inputs: dict, space_name: str = ""
+) -> dict:
+    """Сохранить выбранное время и вернуть текст-подтверждение."""
+    slot_key = parse_time_form(form_inputs)
+    if not slot_key:
+        return {"text": "Отметь время и нажми «Записаться» ещё раз ⏰"}
+    workspace_user_id = user.get("name", "")
+    if not workspace_user_id:
+        return {"text": "Не удалось определить пользователя — голос не сохранён."}
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(
+                db,
+                workspace_user_id=workspace_user_id,
+                email=user.get("email"),
+                display_name=user.get("displayName"),
+                chat_space_id=space_name or None,
+            )
+            confirmation = await save_time_vote(db, profile, slot_key)
+    except Exception:
+        logger.exception("time_vote_save_failed")
         return {"text": "Не удалось сохранить голос. Попробуй ещё раз 🤞"}
     return {"text": confirmation}
 
 
-async def _poll_card_for_user(user_name: str) -> dict:
-    """Карточка недельного опроса на ТЕКУЩУЮ неделю (только будущие дни)."""
-    today = app_today()
-    week_start = week_start_for(today)
-    quorum = 3
+async def _handle_checkin(
+    user: dict, present: bool, space_name: str = ""
+) -> dict:
+    """Сохранить чек-ин «был/нет» и вернуть текст-подтверждение."""
+    workspace_user_id = user.get("name", "")
+    if not workspace_user_id:
+        return {"text": "Не удалось определить пользователя — чек-ин не сохранён."}
     try:
         async with AsyncSessionLocal() as db:
-            from app.services.poll_store import config_value
-
-            await get_or_create_poll_for_week(db, week_start)
-            quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
+            profile = await get_or_create_profile(
+                db,
+                workspace_user_id=workspace_user_id,
+                email=user.get("email"),
+                display_name=user.get("displayName"),
+                chat_space_id=space_name or None,
+            )
+            confirmation = await record_checkin(db, profile, present)
     except Exception:
-        # БД недоступна — показываем карточку текущей недели без создания опроса
-        logger.exception("poll_card_lookup_failed")
-
-    return build_poll_card(
-        week_start=week_start, user_name=user_name, quorum=quorum, min_day=today
-    )
+        logger.exception("checkin_save_failed")
+        return {"text": "Не удалось сохранить чек-ин. Попробуй ещё раз 🤞"}
+    return {"text": confirmation}
 
 
 def _action_method(action: dict) -> str:
@@ -426,17 +474,28 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if "buttonClickedPayload" in chat_data:
             common = event.get("commonEventObject", {}) or {}
             method = _onboarding_action_method(common)
+            user = chat_data.get("user") or chat_data.get("buttonClickedPayload", {}).get("user", {})
+            user_name = user.get("displayName", "друг")
+            space_name = _extract_space_name(chat_data)
+            form_inputs = common.get("formInputs", {}) or {}
+
             if method == "submit_onboarding":
-                form_inputs = common.get("formInputs", {}) or {}
-                space_name = _extract_space_name(chat_data)
-                user = chat_data.get("user", {})
                 response_msg = await _submit_onboarding(user, space_name, form_inputs)
                 return _addon_response(response_msg)
-            if method == "submit_poll_vote":
-                form_inputs = common.get("formInputs", {}) or {}
-                user = chat_data.get("user") or chat_data.get("buttonClickedPayload", {}).get("user", {})
-                space_name = _extract_space_name(chat_data)
-                response_msg = await _submit_poll_vote(user, form_inputs, space_name)
+            if method == "submit_attendance_yes":
+                response_msg = await _handle_attendance(user, True, user_name, space_name)
+                return _addon_response(response_msg)
+            if method == "submit_attendance_no":
+                response_msg = await _handle_attendance(user, False, user_name, space_name)
+                return _addon_response(response_msg)
+            if method == "submit_time":
+                response_msg = await _handle_time_vote(user, form_inputs, space_name)
+                return _addon_response(response_msg)
+            if method == "submit_checkin_yes":
+                response_msg = await _handle_checkin(user, True, space_name)
+                return _addon_response(response_msg)
+            if method == "submit_checkin_no":
+                response_msg = await _handle_checkin(user, False, space_name)
                 return _addon_response(response_msg)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
@@ -451,7 +510,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
 
             # Явный запрос карточки голосования
             if _is_poll_command(raw_text):
-                return _addon_response(await _poll_card_for_user(user_name))
+                return _addon_response(await _attendance_card_for_user(user_name))
 
             # Явный запрос анкеты — показываем карточку заново
             if _is_onboarding_command(raw_text):
@@ -534,7 +593,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if not raw_text:
             return JSONResponse(content={})
         if _is_poll_command(raw_text):
-            return JSONResponse(content=await _poll_card_for_user(user_name))
+            return JSONResponse(content=await _attendance_card_for_user(user_name))
         if _is_onboarding_command(raw_text):
             return JSONResponse(content=_onboarding_card(user_name))
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
@@ -556,14 +615,22 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             form_inputs = event.get("common", {}).get("formInputs", {})
             response_msg = await _submit_onboarding(user, space_name, form_inputs)
             return JSONResponse(content=response_msg)
-        if _action_method(action) == "submit_poll_vote" or (
-            function_name == "submit_poll_vote"
-        ):
-            user = event.get("user", {})
-            space_name = event.get("space", {}).get("name", "")
-            form_inputs = event.get("common", {}).get("formInputs", {})
-            response_msg = await _submit_poll_vote(user, form_inputs, space_name)
-            return JSONResponse(content=response_msg)
+        user = event.get("user", {})
+        user_name = user.get("displayName", "друг")
+        space_name = event.get("space", {}).get("name", "")
+        form_inputs = event.get("common", {}).get("formInputs", {})
+        method = _action_method(action)
+
+        if method == "submit_attendance_yes" or function_name == "submit_attendance_yes":
+            return JSONResponse(content=await _handle_attendance(user, True, user_name, space_name))
+        if method == "submit_attendance_no" or function_name == "submit_attendance_no":
+            return JSONResponse(content=await _handle_attendance(user, False, user_name, space_name))
+        if method == "submit_time" or function_name == "submit_time":
+            return JSONResponse(content=await _handle_time_vote(user, form_inputs, space_name))
+        if method == "submit_checkin_yes" or function_name == "submit_checkin_yes":
+            return JSONResponse(content=await _handle_checkin(user, True, space_name))
+        if method == "submit_checkin_no" or function_name == "submit_checkin_no":
+            return JSONResponse(content=await _handle_checkin(user, False, space_name))
         logger.info("event=CARD_CLICKED format=classic function=%s", function_name)
         return JSONResponse(content={})
 
