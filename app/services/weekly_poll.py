@@ -170,6 +170,41 @@ def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
     return {"meetings": sorted(meetings), "suggest_to": suggest_to, "cancelled": False}
 
 
+def build_daily_poll_card(slots: list[str], action_url: str) -> dict:
+    buttons = []
+    for t in slots:
+        buttons.append({
+            "text": t,
+            "onClick": {"action": {
+                "function": action_url or "submit_daily_poll",
+                "parameters": [
+                    {"key": "method", "value": "submit_daily_poll"},
+                    {"key": "time", "value": t},
+                ],
+            }},
+        })
+    buttons.append({
+        "text": "Не могу сегодня",
+        "onClick": {"action": {
+            "function": action_url or "submit_daily_poll",
+            "parameters": [
+                {"key": "method", "value": "submit_daily_poll"},
+                {"key": "time", "value": "not_available"},
+            ],
+        }},
+    })
+    return {
+        "cardsV2": [{
+            "cardId": "dailyPoll",
+            "card": {
+                "header": {"title": "Кто сегодня и во сколько? 🗓️",
+                           "subtitle": "Выбери время или «не могу»"},
+                "sections": [{"widgets": [{"buttonList": {"buttons": buttons}}]}],
+            },
+        }]
+    }
+
+
 # --- БД-часть (интеграционная) ---
 from datetime import date, date as date_type, timezone  # noqa: E402
 

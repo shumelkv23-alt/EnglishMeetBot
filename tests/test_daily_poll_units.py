@@ -3,6 +3,7 @@ from app.services.form_parsing import parse_form_inputs
 from app.services.weekly_poll import (
     _is_valid_submit_time,
     _normalize_submit_time,
+    build_daily_poll_card,
     resolve_day_result,
 )
 
@@ -55,3 +56,11 @@ def test_is_valid_submit_time_rejects_garbage():
     assert _is_valid_submit_time("15") is False
     assert _is_valid_submit_time("18:00") is False
     assert _is_valid_submit_time("") is False
+
+
+def test_build_daily_poll_card_has_four_buttons():
+    card = build_daily_poll_card(["15:00", "16:00", "17:00"], action_url="https://x/hook")
+    buttons = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"]
+    labels = [b["text"] for b in buttons]
+    assert labels == ["15:00", "16:00", "17:00", "Не могу сегодня"]
+    assert all(b["onClick"]["action"]["function"] == "https://x/hook" for b in buttons)
