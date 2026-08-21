@@ -1,6 +1,6 @@
 # tests/test_daily_poll_units.py
 from app.services.form_parsing import parse_form_inputs
-from app.services.weekly_poll import resolve_day_result
+from app.services.weekly_poll import _normalize_submit_time, resolve_day_result
 
 
 def test_resolve_three_groups():
@@ -31,3 +31,9 @@ def test_parse_form_inputs_addon_nested():
 def test_parse_form_inputs_flat():
     flat = {"q1": {"stringInputs": {"value": ["it", "travel"]}}}
     assert parse_form_inputs(flat) == {"q1": ["it", "travel"]}
+
+
+def test_normalize_submit_time():
+    assert _normalize_submit_time({"time": {"stringInputs": {"value": ["15:00"]}}}) == "15:00"
+    assert _normalize_submit_time({"time": {"stringInputs": {"value": ["not_available"]}}}) == "not_available"
+    assert _normalize_submit_time({}) == ""

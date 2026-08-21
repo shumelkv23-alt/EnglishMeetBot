@@ -55,6 +55,12 @@ def parse_poll_form(form_inputs: dict) -> dict:
     return {"answers": answers, "slot_ids": slot_ids}
 
 
+def _normalize_submit_time(form_inputs: dict) -> str:
+    """Одно выбранное время из formInputs: "15:00" / "not_available" или ""."""
+    vals = parse_form_inputs(form_inputs).get("time", [])
+    return vals[0] if vals else ""
+
+
 def build_poll_card(personal_q: str, bank_q: str, slots: list[dict], action_url: str = "") -> dict:
     """Cards V2 карточка опроса: вопросы через textParagraph + ответы через textInput + чекбоксы дней.
 
@@ -153,13 +159,12 @@ def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
 
 
 # --- БД-часть (интеграционная) ---
-from datetime import date as date_type, timezone  # noqa: E402
+from datetime import date, date as date_type, timezone  # noqa: E402
 
 from sqlalchemy import delete, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.models import (  # noqa: E402
-    Answer,
     Config,
     PollQuestion,
     PollResponse,
@@ -205,6 +210,29 @@ async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Co
         await db.commit()
         await db.refresh(cfg)
     return cfg
+
+
+def today() -> date:
+    """Текущий день в UTC — дата ежедневного опроса."""
+    return datetime.now(timezone.utc).date()
+
+
+def slot_datetime(time_str: str) -> datetime:
+    """Слот-время как datetime: часы/минуты на фиксированной дате-переносчике."""
+    h, m = time_str.split(":")
+    return datetime(2000, 1, 1, int(h), int(m), tzinfo=timezone.utc)
+
+
+async def active_daily_poll(db: AsyncSession, day: date) -> DailyPoll | None:
+    """Активный опрос дня (status='active') или None."""
+    return (
+        await db.execute(
+            select(DailyPoll).where(
+                DailyPoll.poll_date == day,
+                DailyPoll.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def active_poll_for_week(db: AsyncSession, week_start: date_type) -> DailyPoll | None:
@@ -325,8 +353,8 @@ async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> DailyPoll | Non
 
 
 async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> dict:
-    """Сабмит карточки опроса: ответы + голоса + отметка responded."""
-    poll = await active_poll_for_week(db, current_week_start())
+    """Сабмит ежедневного опроса: одно время на человека или «не могу»."""
+    poll = await active_daily_poll(db, today())
     if poll is None:
         return {"ok": False, "reason": "no_poll"}
     deadline = poll.voting_deadline
@@ -335,77 +363,38 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     if deadline < datetime.now(timezone.utc):
         return {"ok": False, "reason": "closed"}
 
-    parsed = parse_poll_form(form_inputs)
-    if not parsed["answers"] and not parsed["slot_ids"]:
+    choice = _normalize_submit_time(form_inputs)
+    if not choice:
         return {"ok": False, "reason": "empty"}
 
-    personal_q = bank_questions_for(poll.week_start)
-    personal_text = personal_q[0]
-    bank_text = personal_q[1]
-
-    llm_row = (
-        await db.execute(
-            select(PollQuestion).where(
-                PollQuestion.poll_id == poll.id,
-                PollQuestion.profile_id == profile.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if llm_row is not None:
-        personal_text = llm_row.question_text
-
-    q_by_name = dict(parsed["answers"])
-    if "q_llm" in q_by_name and q_by_name["q_llm"].strip():
-        db.add(Answer(
-            profile_id=profile.id,
-            question_text=personal_text,
-            answer_text=q_by_name["q_llm"].strip(),
-            is_public=profile.public_consent,
-            week_start=poll.week_start,
-        ))
-    if "q_bank" in q_by_name and q_by_name["q_bank"].strip():
-        db.add(Answer(
-            profile_id=profile.id,
-            question_text=bank_text,
-            answer_text=q_by_name["q_bank"].strip(),
-            is_public=profile.public_consent,
-            week_start=poll.week_start,
-            question_rotation_id=(poll.week_start.isocalendar().week % 20),
-        ))
-
-    # голоса: удалить старые за этот опрос и вставить новые (идемпотентно)
-    await db.execute(
-        delete(PollVote).where(
-            PollVote.profile_id == profile.id,
-            PollVote.poll_slot_id.in_(
-                select(PollSlot.id).where(PollSlot.poll_id == poll.id)
-            ),
-        )
-    )
     response = (
-        await db.execute(
-            select(PollResponse).where(
-                PollResponse.profile_id == profile.id,
-                PollResponse.poll_id == poll.id,
-            )
-        )
+        await db.execute(select(PollResponse).where(
+            PollResponse.profile_id == profile.id, PollResponse.poll_id == poll.id))
     ).scalar_one_or_none()
     if response is None:
         response = PollResponse(profile_id=profile.id, poll_id=poll.id)
         db.add(response)
-    if parsed["slot_ids"]:
+
+    # одно время на человека: убрать старые голоса
+    await db.execute(delete(PollVote).where(
+        PollVote.profile_id == profile.id,
+        PollVote.poll_slot_id.in_(select(PollSlot.id).where(PollSlot.poll_id == poll.id)),
+    ))
+
+    if choice == "not_available":
+        response.status = "not_available"
+    else:
+        slot = (
+            await db.execute(select(PollSlot).where(
+                PollSlot.poll_id == poll.id, PollSlot.slot_start == slot_datetime(choice)))
+        ).scalar_one_or_none()
+        if slot is None:
+            return {"ok": False, "reason": "empty"}
+        db.add(PollVote(profile_id=profile.id, poll_slot_id=slot.id, poll_response_id=response.id))
         response.status = "responded"
         response.responded_at = datetime.now(timezone.utc)
-    await db.flush()
-    for slot_id in parsed["slot_ids"]:
-        slot = (
-            await db.execute(select(PollSlot).where(PollSlot.id == slot_id, PollSlot.poll_id == poll.id))
-        ).scalar_one_or_none()
-        if slot is not None:
-            db.add(PollVote(profile_id=profile.id, poll_slot_id=slot_id, poll_response_id=response.id))
 
     await db.commit()
-    logger.info("weekly_poll_submitted profile_id=%s slots=%s", profile.id, parsed["slot_ids"])
     return {"ok": True, "reason": "saved"}
 
 
