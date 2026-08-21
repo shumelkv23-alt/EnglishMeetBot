@@ -522,7 +522,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             return JSONResponse(content=_onboarding_card(user_name))
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
 
-    if event_type == "CARD_CLICKED":
+if event_type == "CARD_CLICKED":
         action = event.get("action", {})
         function_name = (
             action.get("function")
@@ -530,14 +530,36 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             or action.get("actionMethodName")
             or ""
         )
-        # В add-on кнопке function — URL эндпоинта, имя действия в parameters
-        if function_name == "submit_onboarding" or _action_method(action) == "submit_onboarding":
+        method = _action_method(action)
+        if function_name == "submit_onboarding" or method == "submit_onboarding":
             user = event.get("user", {})
             space_name = event.get("space", {}).get("name", "")
             form_inputs = event.get("common", {}).get("formInputs", {})
             response_msg = await _submit_onboarding(user, space_name, form_inputs)
-            return JSONResponse(content=response_msg)
-        logger.info("event=CARD_CLICKED format=classic function=%s", function_name)
+            return _addon_response(response_msg)
+        if function_name == "weekly_poll_submit" or method == "submit_weekly_poll":
+            user = event.get("user", {})
+            space_name = event.get("space", {}).get("name", "")
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            response_msg = await _submit_weekly_poll(
+                {"user": user, "space": {"name": space_name}},
+                {"formInputs": form_inputs},
+            )
+            return _addon_response(response_msg)
+        if function_name == "checkin_submit" or method == "checkin_present":
+            user = event.get("user", {})
+            space_name = event.get("space", {}).get("name", "")
+            params = action.get("parameters") or {}
+            instance_id = ""
+            for p in params:
+                if isinstance(p, dict) and p.get("key") == "instance":
+                    instance_id = p.get("value", "")
+            response_msg = await _handle_checkin_present(
+                {"user": user, "space": {"name": space_name}},
+                {"parameters": {"instance": instance_id}},
+            )
+            return _addon_response(response_msg)
+        logger.info("event=CARD_CLICKED format=classic function=%s method=%s", function_name, method)
         return JSONResponse(content={})
 
     # REMOVED_FROM_SPACE и неизвестные типы — тихо отвечаем пустым JSON
