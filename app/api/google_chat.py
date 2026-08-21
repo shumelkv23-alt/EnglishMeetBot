@@ -187,6 +187,18 @@ def _is_onboarding_command(raw_text: str) -> bool:
     return any(trigger in lowered for trigger in ("анкета", "start", "онбординг", "опрос", "anketa"))
 
 
+def _onboarding_response_payload(user_name: str, space: dict) -> dict:
+    """Карточка анкеты — только в личку; в группу — текст-подсказка без карточки.
+
+    Явный запрос анкеты («анкета»/«start»/«опрос»…) в группе не должен уводить
+    карточку в общий чат: в DM показываем саму анкету, иначе — просим написать
+    боту в личку.
+    """
+    if _space_is_dm(space):
+        return _onboarding_card(user_name)
+    return {"text": "Напиши мне в личку, чтобы пройти анкету 🙌"}
+
+
 def _action_method(action: dict) -> str:
     """Имя действия из параметров клика (add-on: [{"key": "method", "value": ...}])."""
     for param in action.get("parameters") or []:
@@ -579,9 +591,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if not raw_text:
                 return JSONResponse(content={})
 
-            # Явный запрос анкеты — показываем карточку заново
+            # Явный запрос анкеты — карточка только в личку, в группу не шлём
             if _is_onboarding_command(raw_text):
-                return _addon_response(_onboarding_card(user_name))
+                space = _extract_space_dict(chat_data)
+                return _addon_response(_onboarding_response_payload(user_name, space))
 
             # Сохраняем профиль и ответ в БД
             user = chat_data.get("user", {})
@@ -649,7 +662,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if not raw_text:
             return JSONResponse(content={})
         if _is_onboarding_command(raw_text):
-            return JSONResponse(content=_onboarding_card(user_name))
+            space = event.get("space", {})
+            return JSONResponse(content=_onboarding_response_payload(user_name, space))
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
 
     if event_type == "CARD_CLICKED":
