@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Answer, Profile
+from app.services.form_parsing import parse_form_inputs
 from app.services.onboarding import current_week_start, mark_onboarded
 
 logger = logging.getLogger(__name__)
@@ -36,14 +37,7 @@ def _get_values(form_inputs: dict, name: str) -> list[str]:
     классический {name: {"stringInputs": {...}}} и
     add-on       {name: {"": {"stringInputs": {...}}}}.
     """
-    field = form_inputs.get(name, {})
-    if not isinstance(field, dict):
-        return []
-    payload = field.get("stringInputs") or field.get("")
-    if not isinstance(payload, dict):
-        return []
-    values = payload.get("value", [])
-    return [v.strip() for v in values if isinstance(v, str) and v.strip()]
+    return parse_form_inputs(form_inputs).get(name, [])
 
 
 def _get_single(form_inputs: dict, name: str) -> str:

@@ -6,6 +6,8 @@
 import logging
 from datetime import datetime, timedelta
 
+from app.services.form_parsing import parse_form_inputs
+
 logger = logging.getLogger(__name__)
 
 DAY_RU = {
@@ -41,15 +43,7 @@ def parse_poll_form(form_inputs: dict) -> dict:
     """
     answers = []
     slot_ids = []
-    for name, field in (form_inputs or {}).items():
-        if not isinstance(field, dict):
-            continue
-        payload = field.get("stringInputs") or field.get("")
-        if not isinstance(payload, dict):
-            continue
-        values = [v.strip() for v in payload.get("value", []) if isinstance(v, str) and v.strip()]
-        if not values:
-            continue
+    for name, values in parse_form_inputs(form_inputs).items():
         if name.startswith("q_"):
             answers.append((name, values[0]))
         else:
