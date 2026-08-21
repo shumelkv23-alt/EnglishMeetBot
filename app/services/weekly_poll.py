@@ -8,6 +8,18 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+DAY_RU = {
+    "Mon": "Понедельник",
+    "Tue": "Вторник",
+    "Wed": "Среда",
+    "Thu": "Четверг",
+    "Fri": "Пятница",
+    "Sat": "Суббота",
+    "Sun": "Воскресенье",
+}
+
+WORKDAY_SLOTS = [{"day": d, "time": "19:00", "location": "Онлайн (Meet)"} for d in ["Mon", "Tue", "Wed", "Thu", "Fri"]]
+
 
 def slot_day_time(slot_start: datetime) -> tuple[str, str]:
     """День недели и время слота в формате схемы Slot: ("Wed", "19:00")."""
@@ -50,24 +62,33 @@ def parse_poll_form(form_inputs: dict) -> dict:
 
 
 def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
-    """Cards V2 карточка опроса: 2 текстовых ответа + чекбоксы слотов."""
+    """Cards V2 карточка опроса: вопросы через textParagraph + ответы через textInput + чекбоксы дней."""
     question_widgets = []
     for name, label in (("q_llm", personal_q), ("q_bank", bank_q)):
         question_widgets.append({
-            "textInput": {"name": name, "label": label}
+            "textParagraph": {"text": f"<b>{label}</b>"}
+        })
+        question_widgets.append({
+            "textInput": {"name": name, "label": "Твой ответ"}
+        })
+
+    day_items = []
+    for s in slots:
+        day_text = DAY_RU.get(s["label"], s["label"])
+        day_items.append({
+            "text": day_text,
+            "value": str(s["id"]),
+            "selected": False,
         })
 
     slot_widgets = [{
         "selectionInput": {
             "name": "slots",
-            "label": "Отметь слоты, которые тебе подходят (можно несколько)",
+            "label": "Выбери удобные дни (можно несколько)",
             "type": "CHECK_BOX",
-            "items": [
-                {"text": s["label"], "value": str(s["id"]), "selected": False}
-                for s in slots
-            ],
+            "items": day_items,
         }
-    }] if slots else [{
+    }] if day_items else [{
         "textParagraph": {
             "text": "На эту неделю слоты ещё не заданы — обсудим время на встрече."
         }
@@ -80,11 +101,11 @@ def build_poll_card(personal_q: str, bank_q: str, slots: list[dict]) -> dict:
                 "card": {
                     "header": {
                         "title": "Еженедельный опрос 🗓️",
-                        "subtitle": "Ответь на 2 вопроса и отметь удобное время",
+                        "subtitle": "Ответь на 2 вопроса и отметь удобные дни",
                     },
                     "sections": [
                         {"header": "Вопросы недели", "widgets": question_widgets},
-                        {"header": "Время встречи", "widgets": slot_widgets},
+                        {"header": "Удобные дни", "widgets": slot_widgets},
                         {
                             "widgets": [
                                 {
@@ -254,8 +275,23 @@ async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> WeeklyPoll | No
         ))
         slot_times.append(dt)
 
-    if not slot_times and await _copy_last_week_slots(db, poll, week_start) == 0:
-        logger.warning("weekly_poll_no_slots week=%s", week_start)
+    if not slot_times:
+        for item in WORKDAY_SLOTS:
+            dt = _slot_datetime_for_week(week_start, item["day"], item["time"])
+            if dt is None:
+                continue
+            db.add(PollSlot(
+                poll_id=poll.id,
+                slot_start=_week_aware(week_start, dt),
+                slot_end=_week_aware(week_start, dt) + timedelta(minutes=90),
+                location=item.get("location", "Онлайн (Meet)"),
+                priority=item.get("priority", 0),
+            ))
+            slot_times.append(dt)
+        if slot_times:
+            logger.info("weekly_poll_default_slots created=%s", len(slot_times))
+        else:
+            logger.warning("weekly_poll_no_slots week=%s", week_start)
 
     slots = (await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))).scalars().all()
     if slots:
@@ -427,7 +463,7 @@ async def send_weekly_polls(db: AsyncSession, now: datetime) -> dict:
         select(PollSlot).where(PollSlot.poll_id == poll.id).order_by(PollSlot.slot_start)
     )).scalars().all()
     slot_labels = [
-        {"id": s.id, "label": f"{s.slot_start.strftime('%a')} {s.slot_start.strftime('%H:%M')}"}
+        {"id": s.id, "label": s.slot_start.strftime("%a")}
         for s in slots
     ]
 

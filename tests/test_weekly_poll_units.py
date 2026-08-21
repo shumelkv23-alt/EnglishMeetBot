@@ -35,11 +35,19 @@ def test_slot_day_time():
 
 
 def test_build_poll_card_structure():
-    card = build_poll_card("Персональный вопрос?", "Банковский вопрос?", [{"id": 7, "label": "Ср 19:00"}])
+    card = build_poll_card("Персональный вопрос?", "Банковский вопрос?", [{"id": 7, "label": "Wed"}])
     assert card["cardsV2"][0]["cardId"] == "weeklyPoll"
     sections = card["cardsV2"][0]["card"]["sections"]
     assert len(sections) == 3  # вопросы + слоты + кнопка
-    assert len(sections[0]["widgets"]) == 2  # q_llm + q_bank
-    assert sections[0]["widgets"][0]["textInput"]["name"] == "q_llm"
+    widgets = sections[0]["widgets"]
+    # textParagraph (вопрос) + textInput (ответ) для каждого из 2 вопросов = 4 виджета
+    assert len(widgets) == 4
+    assert widgets[0]["textParagraph"]["text"] == "<b>Персональный вопрос?</b>"
+    assert widgets[1]["textInput"]["name"] == "q_llm"
+    assert widgets[1]["textInput"]["label"] == "Твой ответ"
+    assert widgets[2]["textParagraph"]["text"] == "<b>Банковский вопрос?</b>"
+    assert widgets[3]["textInput"]["name"] == "q_bank"
+    # слоты: русское название дня
     items = sections[1]["widgets"][0]["selectionInput"]["items"]
-    assert items[0] == {"text": "Ср 19:00", "value": "7", "selected": False}
+    assert items[0]["text"] == "Среда"
+    assert items[0]["value"] == "7"

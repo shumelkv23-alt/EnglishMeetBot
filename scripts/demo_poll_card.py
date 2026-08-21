@@ -1,25 +1,43 @@
-"""Демо: бот присылает карточку еженедельного опроса (вопрос + слоты времени).
+"""Демо: бот присылает обновлённую карточку опроса (Пн-Пт + читаемые вопросы).
 
-Отправляет реальную Cards V2-карточку в CHAT_TEST_SPACE из .env.
 Запуск: .\venv\Scripts\python -m scripts.demo_poll_card
 """
 import asyncio
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import PollSlot
+from app.models import Config, PollSlot, PollVote, PollResponse, WeeklyPoll
 from app.services.chat_sender import send_message
 from app.services.llm_questions import generate_personal_question
-from app.services.onboarding import get_or_create_profile
+from app.services.onboarding import get_or_create_profile, current_week_start
 from app.services.question_bank import bank_questions_for
 from app.services.weekly_poll import build_poll_card, ensure_weekly_poll
 
 
 async def main() -> None:
     async with AsyncSessionLocal() as db:
+        # Удалить старый опрос недели, чтобы ensure создал новый со слотами Пн-Пт
+        old = (await db.execute(
+            select(WeeklyPoll).where(WeeklyPoll.week_start == current_week_start())
+        )).scalar_one_or_none()
+        if old is not None:
+            await db.execute(delete(PollVote).where(
+                PollVote.poll_slot_id.in_(select(PollSlot.id).where(PollSlot.poll_id == old.id))
+            ))
+            await db.execute(delete(PollSlot).where(PollSlot.poll_id == old.id))
+            await db.execute(delete(PollResponse).where(PollResponse.poll_id == old.id))
+            await db.execute(delete(WeeklyPoll).where(WeeklyPoll.id == old.id))
+            await db.commit()
+
+        # Очистить конфиг слотов, чтобы ensure_weekly_poll создал дефолтные Пн-Пт
+        cfg = (await db.execute(select(Config).where(Config.key == "poll_slots"))).scalar_one_or_none()
+        if cfg is not None:
+            cfg.value = []
+            await db.commit()
+
         poll = await ensure_weekly_poll(db, datetime.now(timezone.utc))
 
         bank_q1, bank_q2 = bank_questions_for(poll.week_start)
@@ -29,16 +47,16 @@ async def main() -> None:
         )
         interests = list(profile.interests or [])
         personal_q = generate_personal_question(interests) or bank_q2
-        print("personal_q:", personal_q)
 
         slots = (
             await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id).order_by(PollSlot.slot_start))
         ).scalars().all()
         slot_labels = [
-            {"id": s.id, "label": f"{s.slot_start.strftime('%a')} {s.slot_start.strftime('%H:%M')}"}
+            {"id": s.id, "label": s.slot_start.strftime("%a")}
             for s in slots
         ]
-        print("slot_labels:", slot_labels)
+        print("slots:", slot_labels)
+        print("personal_q:", personal_q[:60] + "..." if len(personal_q) > 60 else personal_q)
 
         card = build_poll_card(personal_q, bank_q1, slot_labels)
         space = get_settings().chat_test_space
