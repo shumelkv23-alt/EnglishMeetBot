@@ -394,6 +394,86 @@ def _onboarding_card(user_name: str) -> dict:
     }
 
 
+async def _register_contact(chat_data: dict, space_name: str) -> None:
+    """Зарегистрировать профиль пользователя события (момент первого контакта).
+
+    chat_space_id фиксирует пространство/DM и нужен для проактивных DM-рассылок.
+    """
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    if workspace_user_id:
+        try:
+            async with AsyncSessionLocal() as db:
+                await get_or_create_profile(
+                    db,
+                    workspace_user_id=workspace_user_id,
+                    email=user.get("email"),
+                    display_name=user.get("displayName"),
+                    chat_space_id=space_name or None,
+                )
+        except Exception:
+            logger.exception("db_write_failed")
+    else:
+        logger.warning("added_to_space_without_user_name, db write skipped")
+
+
+async def _run_onboarding(space_name: str) -> dict:
+    """Онбординг при добавлении в пространство: анкета в личку, @упоминание в группу.
+
+    Сохраняет space_id в config и через onboard_space_members планирует каналы:
+      - plan["dm"] — уже есть DM с ботом и онбординг не пройден → анкета в личку;
+      - plan["mention"] — нет DM → @упоминание в группу с просьбой написать боту.
+    Возвращает план: {'dm': [...], 'mention': [...]}.
+    """
+    from app.messaging import send_message
+    from app.schemas import MessagePayload
+    from app.services.chat_sender import send_text
+    from app.services.space_onboarding import onboard_space_members
+    from app.services.weekly_poll import get_or_create_config
+
+    plan: dict = {"dm": [], "mention": []}
+    if not space_name:
+        return plan
+    try:
+        async with AsyncSessionLocal() as db:
+            await get_or_create_config(db, "space_id", space_name)
+            plan = await onboard_space_members(db, space_name)
+    except Exception:
+        # Сбой планирования не должен ронять обработку события
+        logger.exception("onboarding_plan_failed space=%s", space_name)
+        return plan
+
+    # Анкета в личку тем, у кого уже есть DM с ботом
+    for ws in plan["dm"]:
+        try:
+            send_message(
+                ws,
+                MessagePayload(
+                    text="Привет! Заполни короткую анкету 🙌",
+                    card=_onboarding_card("друг"),
+                ),
+            )
+        except Exception:
+            logger.exception("onboarding_dm_failed user=%s", ws)
+
+    # Остальным — одно сообщение в группу с @упоминаниями
+    if plan["mention"]:
+        mentions = " ".join(f"<{m}>" for m in plan["mention"])
+        try:
+            send_text(
+                space_name,
+                f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋",
+            )
+        except Exception:
+            logger.exception("onboarding_mention_failed space=%s", space_name)
+
+    logger.info(
+        "onboarding_run space=%s dm=%d mention=%d",
+        space_name, len(plan["dm"]), len(plan["mention"]),
+    )
+    return plan
+
+
 def _reply_text(user_name: str, raw_text: str) -> str:
     """Текст ответа на MESSAGE: приветствие или echo."""
     if "привет" in raw_text.lower():
@@ -506,25 +586,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if "addedToSpacePayload" in chat_data:
             space_name = chat_data["addedToSpacePayload"].get("space", {}).get("name", "")
             logger.info("event=ADDED_TO_SPACE format=addon user=%r space=%s", user_name, space_name)
-            # Регистрируем профиль в момент первого контакта;
-            # chat_space_id нужен для проактивных DM-рассылок
-            user = chat_data.get("user", {})
-            workspace_user_id = user.get("name", "")
-            if workspace_user_id:
-                try:
-                    async with AsyncSessionLocal() as db:
-                        await get_or_create_profile(
-                            db,
-                            workspace_user_id=workspace_user_id,
-                            email=user.get("email"),
-                            display_name=user.get("displayName"),
-                            chat_space_id=space_name or None,
-                        )
-                except Exception:
-                    logger.exception("db_write_failed")
-            else:
-                logger.warning("added_to_space_without_user_name, db write skipped")
-            return _addon_response(_onboarding_card(user_name))
+            await _register_contact(chat_data, space_name)
+            # Онбординг: анкета в личку / @упоминание в группу
+            await _run_onboarding(space_name)
+            return JSONResponse(content={})
 
         # Нажали кнопку на карточке (submit анкеты онбординга)
         action = chat_data.get("action", {})
@@ -546,7 +611,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
     if event_type == "ADDED_TO_SPACE":
         user_name = event.get("user", {}).get("displayName", "")
         logger.info("event=ADDED_TO_SPACE format=classic user=%s", user_name)
-        return JSONResponse(content=_onboarding_card(user_name or "друг"))
+        space_name = event.get("space", {}).get("name", "")
+        await _register_contact(event, space_name)
+        # Онбординг: анкета в личку / @упоминание в группу
+        await _run_onboarding(space_name)
+        return JSONResponse(content={})
 
     if event_type == "MESSAGE":
         user_name = event.get("user", {}).get("displayName", "друг")
