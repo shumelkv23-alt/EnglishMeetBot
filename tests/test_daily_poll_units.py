@@ -1,6 +1,10 @@
 # tests/test_daily_poll_units.py
 from app.services.form_parsing import parse_form_inputs
-from app.services.weekly_poll import _normalize_submit_time, resolve_day_result
+from app.services.weekly_poll import (
+    _is_valid_submit_time,
+    _normalize_submit_time,
+    resolve_day_result,
+)
 
 
 def test_resolve_three_groups():
@@ -37,3 +41,17 @@ def test_normalize_submit_time():
     assert _normalize_submit_time({"time": {"stringInputs": {"value": ["15:00"]}}}) == "15:00"
     assert _normalize_submit_time({"time": {"stringInputs": {"value": ["not_available"]}}}) == "not_available"
     assert _normalize_submit_time({}) == ""
+
+
+def test_is_valid_submit_time_accepts_slots_and_not_available():
+    assert _is_valid_submit_time("15:00") is True
+    assert _is_valid_submit_time("16:00") is True
+    assert _is_valid_submit_time("17:00") is True
+    assert _is_valid_submit_time("not_available") is True
+
+
+def test_is_valid_submit_time_rejects_garbage():
+    assert _is_valid_submit_time("banana") is False
+    assert _is_valid_submit_time("15") is False
+    assert _is_valid_submit_time("18:00") is False
+    assert _is_valid_submit_time("") is False

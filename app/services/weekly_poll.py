@@ -61,6 +61,18 @@ def _normalize_submit_time(form_inputs: dict) -> str:
     return vals[0] if vals else ""
 
 
+ALLOWED_SUBMIT_TIMES = frozenset({"15:00", "16:00", "17:00"})
+
+
+def _is_valid_submit_time(choice: str) -> bool:
+    """Допустимое значение сабмита: "not_available" или слот из ALLOWED_SUBMIT_TIMES.
+
+    Защищает slot_datetime от невалидного входа ("banana", "15") — валидация
+    до вызова, невалидное время в submit_poll превращается в reason="empty".
+    """
+    return choice == "not_available" or choice in ALLOWED_SUBMIT_TIMES
+
+
 def build_poll_card(personal_q: str, bank_q: str, slots: list[dict], action_url: str = "") -> dict:
     """Cards V2 карточка опроса: вопросы через textParagraph + ответы через textInput + чекбоксы дней.
 
@@ -364,7 +376,7 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
         return {"ok": False, "reason": "closed"}
 
     choice = _normalize_submit_time(form_inputs)
-    if not choice:
+    if not _is_valid_submit_time(choice):
         return {"ok": False, "reason": "empty"}
 
     response = (
@@ -374,6 +386,7 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     if response is None:
         response = PollResponse(profile_id=profile.id, poll_id=poll.id)
         db.add(response)
+    await db.flush()  # response.id заполнен до вставки PollVote (без неявного autoflush)
 
     # одно время на человека: убрать старые голоса
     await db.execute(delete(PollVote).where(
@@ -383,12 +396,14 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
 
     if choice == "not_available":
         response.status = "not_available"
+        response.responded_at = None  # CHECK valid_response: responded_at только при responded
     else:
         slot = (
             await db.execute(select(PollSlot).where(
                 PollSlot.poll_id == poll.id, PollSlot.slot_start == slot_datetime(choice)))
         ).scalar_one_or_none()
         if slot is None:
+            await db.rollback()  # откат pending: новый response и удалённые старые голоса
             return {"ok": False, "reason": "empty"}
         db.add(PollVote(profile_id=profile.id, poll_slot_id=slot.id, poll_response_id=response.id))
         response.status = "responded"
