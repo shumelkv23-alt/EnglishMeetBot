@@ -33,7 +33,8 @@ def send_message(user_id: str, payload: MessagePayload) -> None:
         try:
             space = find_user_dm_space(user_id)
             if space:
-                _chat_send(space, text=payload.text, cards=[payload.card] if payload.card else None)
+                cards_v2 = payload.card.get("cardsV2") if payload.card else None
+                _chat_send(space, text=payload.text, cards_v2=cards_v2)
                 return
             logger.warning("dm_space_not_found user=%s, fallback to stub", user_id)
         except Exception:

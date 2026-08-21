@@ -58,6 +58,8 @@ def send_message(
         json=body,
         timeout=15,
     )
+    if not resp.ok:
+        logger.error("chat_api_error status=%s body=%s", resp.status_code, resp.text)
     resp.raise_for_status()
     logger.info("message_sent space=%s status=%s", space_name, resp.status_code)
     return resp.json()
