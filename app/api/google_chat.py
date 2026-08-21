@@ -1,4 +1,6 @@
 # app/api/google_chat.py
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.auth.transport import requests as grequests
@@ -13,6 +15,12 @@ from app.services.onboarding import (
     save_answer,
 )
 from app.services.onboarding_answers import save_onboarding_answers
+from app.services.poll_store import (
+    current_or_next_poll,
+    parse_poll_form,
+    save_poll_vote,
+)
+from app.services.poll_card import build_poll_card
 
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
@@ -86,6 +94,58 @@ def _is_onboarding_command(raw_text: str) -> bool:
     """Пользователь явно просит показать анкету онбординга."""
     lowered = raw_text.lower().strip()
     return any(trigger in lowered for trigger in ("анкета", "start", "онбординг", "опрос", "anketa"))
+
+
+def _is_poll_command(raw_text: str) -> bool:
+    """Пользователь просит карточку недельного голосования."""
+    return "голосование" in raw_text.lower()
+
+
+async def _submit_poll_vote(user: dict, form_inputs: dict) -> dict:
+    """Сохранить голос недельного опроса и вернуть текст-подтверждение."""
+    workspace_user_id = user.get("name", "")
+    if not workspace_user_id:
+        return {"text": "Не удалось определить пользователя — голос не сохранён."}
+    days, _themes = parse_poll_form(form_inputs)
+    if not days:
+        return {"text": "Отметь хотя бы один день в карточке и нажми кнопку ещё раз 🗓"}
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(
+                db,
+                workspace_user_id=workspace_user_id,
+                email=user.get("email"),
+                display_name=user.get("displayName"),
+            )
+            confirmation = await save_poll_vote(db, profile, form_inputs)
+    except Exception:
+        logger.exception("poll_vote_save_failed")
+        return {"text": "Не удалось сохранить голос. Попробуй ещё раз 🤞"}
+    return {"text": confirmation}
+
+
+async def _poll_card_for_user(user_name: str) -> dict:
+    """Карточка активного (или нового ближайшего) недельного опроса."""
+    quorum = 3
+    week_start = None
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services.poll_store import config_value, get_or_create_poll_for_week
+
+            poll = await current_or_next_poll(db, date.today())
+            if poll is None:
+                monday = date.today() - timedelta(days=date.today().weekday())
+                poll = await get_or_create_poll_for_week(db, monday)
+            quorum = int(await config_value(db, "quorum_threshold", 3) or 3)
+            week_start = poll.week_start
+    except Exception:
+        logger.exception("poll_card_lookup_failed")
+
+    if week_start is None:
+        # БД недоступна — показываем карточку текущей недели без создания опроса
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+    return build_poll_card(week_start=week_start, user_name=user_name, quorum=quorum)
 
 
 def _action_method(action: dict) -> str:
@@ -375,6 +435,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 user = chat_data.get("user", {})
                 response_msg = await _submit_onboarding(user, space_name, form_inputs)
                 return _addon_response(response_msg)
+            if method == "submit_poll_vote":
+                form_inputs = common.get("formInputs", {}) or {}
+                user = chat_data.get("user") or chat_data.get("buttonClickedPayload", {}).get("user", {})
+                response_msg = await _submit_poll_vote(user, form_inputs)
+                return _addon_response(response_msg)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 
@@ -385,6 +450,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             logger.info("event=MESSAGE format=addon user=%r text=%r", user_name, raw_text)
             if not raw_text:
                 return JSONResponse(content={})
+
+            # Явный запрос карточки голосования
+            if _is_poll_command(raw_text):
+                return _addon_response(await _poll_card_for_user(user_name))
 
             # Явный запрос анкеты — показываем карточку заново
             if _is_onboarding_command(raw_text):
@@ -466,6 +535,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         logger.info("event=MESSAGE format=classic user=%s text=%r", user_name, raw_text)
         if not raw_text:
             return JSONResponse(content={})
+        if _is_poll_command(raw_text):
+            return JSONResponse(content=await _poll_card_for_user(user_name))
         if _is_onboarding_command(raw_text):
             return JSONResponse(content=_onboarding_card(user_name))
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
@@ -479,11 +550,20 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             or ""
         )
         # В add-on кнопке function — URL эндпоинта, имя действия в parameters
-        if function_name == "submit_onboarding" or _action_method(action) == "submit_onboarding":
+        if _action_method(action) == "submit_onboarding" or (
+            function_name == "submit_onboarding"
+        ):
             user = event.get("user", {})
             space_name = event.get("space", {}).get("name", "")
             form_inputs = event.get("common", {}).get("formInputs", {})
             response_msg = await _submit_onboarding(user, space_name, form_inputs)
+            return JSONResponse(content=response_msg)
+        if _action_method(action) == "submit_poll_vote" or (
+            function_name == "submit_poll_vote"
+        ):
+            user = event.get("user", {})
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            response_msg = await _submit_poll_vote(user, form_inputs)
             return JSONResponse(content=response_msg)
         logger.info("event=CARD_CLICKED format=classic function=%s", function_name)
         return JSONResponse(content={})

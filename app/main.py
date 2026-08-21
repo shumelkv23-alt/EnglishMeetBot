@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.config import get_settings
 from app.api.health import router as health_router
 from app.api.google_chat import router as google_chat_router
+from app.scheduler import shutdown_scheduler, start_scheduler
 
 settings = get_settings()
 
@@ -21,7 +22,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting up application in {settings.app_env} mode...")
+    try:
+        await start_scheduler()
+    except Exception:
+        # Планировщик не должен мешать подъёму вебхука (например, нет БД)
+        logger.exception("scheduler_start_failed")
     yield
+    shutdown_scheduler()
     logger.info("Shutting down application...")
 
 # ВАЖНО: переменная должна называться именно app

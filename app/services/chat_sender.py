@@ -46,6 +46,24 @@ def send_text(space_name: str, text: str) -> dict:
     return resp.json()
 
 
+def send_card(space_name: str, cards_v2: list[dict]) -> dict:
+    """Отправить сообщение с карточкой (Cards V2) от имени бота.
+
+    cards_v2 — список карточек, как в ответе вебхука
+    (например build_poll_card()['cardsV2']).
+    """
+    creds = _bot_credentials()
+    resp = requests.post(
+        f"{CHAT_API_BASE}/{space_name}/messages",
+        headers={"Authorization": f"Bearer {creds.token}"},
+        json={"cardsV2": cards_v2},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    logger.info("card_sent space=%s status=%s", space_name, resp.status_code)
+    return resp.json()
+
+
 def list_space_members(space_name: str) -> list[dict]:
     """Список участников пространства (memberships).
 
