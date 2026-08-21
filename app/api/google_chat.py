@@ -522,7 +522,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             return JSONResponse(content=_onboarding_card(user_name))
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
 
-if event_type == "CARD_CLICKED":
+    if event_type == "CARD_CLICKED":
         action = event.get("action", {})
         function_name = (
             action.get("function")
