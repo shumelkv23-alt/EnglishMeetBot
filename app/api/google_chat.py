@@ -103,6 +103,41 @@ async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
     return {"text": "Не получилось сохранить ответы — заполни хотя бы что-нибудь и нажми «Отправить»."}
 
 
+async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
+    """Обработать клик по кнопке ежедневного опроса (add-on и classic формат).
+
+    Кнопки карточки шлют время в action.parameters, а не в formInputs —
+    перекладываем его в formInputs, чтобы submit_poll нашёл слот по ключу "time".
+    """
+    form_inputs = common.get("formInputs", {}) or {}
+    params = common.get("parameters") or {}
+    if isinstance(params, list):
+        params = {p.get("key"): p.get("value") for p in params if isinstance(p, dict)}
+    if not form_inputs and isinstance(params, dict) and params.get("time"):
+        form_inputs = {"time": {"stringInputs": {"value": [str(params["time"])]}}}
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    result = {"ok": False, "reason": "no_user"}
+    if workspace_user_id:
+        try:
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                    chat_space_id=_extract_space_name(chat_data) or None,
+                )
+                from app.services.weekly_poll import submit_poll
+                result = await submit_poll(db, profile, form_inputs)
+        except Exception:
+            logger.exception("daily_poll_submit_failed")
+            result = {"ok": False, "reason": "db_error"}
+    if result.get("ok"):
+        return {"text": "Спасибо, учёл! 🙌"}
+    if result.get("reason") == "closed":
+        return {"text": "Голосование уже закрыто — итог объявлен."}
+    return {"text": "Не получилось сохранить — попробуй ещё раз."}
+
+
 async def _submit_onboarding(user: dict, space_name: str, form_inputs: dict) -> dict:
     """Сохранить анкету онбординга и вернуть текстовое сообщение для пользователя."""
     workspace_user_id = user.get("name", "")
@@ -425,6 +460,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 return _addon_response(response_msg)
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
+            if method == "submit_daily_poll":
+                return _addon_response(await _submit_daily_poll(chat_data, common))
             if method == "checkin_present":
                 return _addon_response(await _handle_checkin_present(chat_data, common))
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
@@ -544,6 +581,19 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             response_msg = await _submit_weekly_poll(
                 {"user": user, "space": {"name": space_name}},
                 {"formInputs": form_inputs},
+            )
+            return _addon_response(response_msg)
+        if function_name == "submit_daily_poll" or method == "submit_daily_poll":
+            user = event.get("user", {})
+            space_name = event.get("space", {}).get("name", "")
+            params = {}
+            for p in action.get("parameters") or []:
+                if isinstance(p, dict) and p.get("key"):
+                    params[p.get("key")] = p.get("value")
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            response_msg = await _submit_daily_poll(
+                {"user": user, "space": {"name": space_name}},
+                {"formInputs": form_inputs, "parameters": params},
             )
             return _addon_response(response_msg)
         if function_name == "checkin_submit" or method == "checkin_present":
