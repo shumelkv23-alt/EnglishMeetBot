@@ -139,6 +139,25 @@ def build_poll_card(personal_q: str, bank_q: str, slots: list[dict], action_url:
     }
 
 
+def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
+    """Итог дня: какие времена набрали порог, кому предложить другое время.
+
+    votes — {"15:00": N, ...}; quorum — минимальное число голосов.
+    Возвращает {"meetings": [...], "suggest_to": {...}, "cancelled": bool}.
+    """
+    meetings = [t for t, c in votes.items() if c >= quorum]
+    if not meetings:
+        return {"meetings": [], "suggest_to": {}, "cancelled": True}
+    # самое популярное из состоявшихся — для предложения недобравшим
+    best = max(meetings, key=lambda t: votes[t])
+    suggest_to = {
+        t: best
+        for t, c in votes.items()
+        if 0 < c < quorum
+    }
+    return {"meetings": sorted(meetings), "suggest_to": suggest_to, "cancelled": False}
+
+
 # --- БД-часть (интеграционная) ---
 from datetime import date as date_type, timezone  # noqa: E402
 
