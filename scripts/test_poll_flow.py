@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.database import AsyncSessionLocal
-from app.models import Answer, PollResponse, PollSlot, PollVote, WeeklyPoll
+from app.models import Answer, PollResponse, PollSlot, PollVote, DailyPoll
 from app.services.onboarding import current_week_start, get_or_create_profile
 from app.services.weekly_poll import ensure_weekly_poll, get_or_create_config, submit_poll
 from sqlalchemy import delete, select
@@ -28,11 +28,11 @@ async def main() -> None:
         await db.execute(Answer.__table__.delete().where(Answer.profile_id == profile.id))
         await db.execute(delete(PollVote).where(PollVote.profile_id == profile.id))
         await db.execute(delete(PollResponse).where(PollResponse.profile_id == profile.id))
-        old = (await db.execute(select(WeeklyPoll).where(WeeklyPoll.week_start == current_week_start()))).scalar_one_or_none()
+        old = (await db.execute(select(DailyPoll).where(DailyPoll.week_start == current_week_start()))).scalar_one_or_none()
         if old is not None:
             await db.execute(delete(PollSlot).where(PollSlot.poll_id == old.id))
             await db.execute(delete(PollResponse).where(PollResponse.poll_id == old.id))
-            await db.execute(delete(WeeklyPoll).where(WeeklyPoll.id == old.id))
+            await db.execute(delete(DailyPoll).where(DailyPoll.id == old.id))
             await db.commit()
 
         poll = await ensure_weekly_poll(db, datetime.now(timezone.utc))

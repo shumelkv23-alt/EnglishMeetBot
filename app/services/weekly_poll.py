@@ -153,7 +153,7 @@ from app.models import (  # noqa: E402
     PollSlot,
     PollVote,
     Profile,
-    WeeklyPoll,
+    DailyPoll,
 )
 from app.config import get_settings  # noqa: E402
 from app.services.onboarding import current_week_start  # noqa: E402
@@ -194,12 +194,12 @@ async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Co
     return cfg
 
 
-async def active_poll_for_week(db: AsyncSession, week_start: date_type) -> WeeklyPoll | None:
+async def active_poll_for_week(db: AsyncSession, week_start: date_type) -> DailyPoll | None:
     return (
         await db.execute(
-            select(WeeklyPoll).where(
-                WeeklyPoll.week_start == week_start,
-                WeeklyPoll.status == "active",
+            select(DailyPoll).where(
+                DailyPoll.week_start == week_start,
+                DailyPoll.status == "active",
             )
         )
     ).scalar_one_or_none()
@@ -214,13 +214,13 @@ def _week_aware(week_start: date_type, naive: datetime) -> datetime:
     return naive.replace(tzinfo=timezone.utc)
 
 
-async def _copy_last_week_slots(db: AsyncSession, poll: WeeklyPoll, week_start: date_type) -> int:
+async def _copy_last_week_slots(db: AsyncSession, poll: DailyPoll, week_start: date_type) -> int:
     """Автокопия слотов прошлой недели (REQ-10) для нового опроса."""
     prev_poll = (
         await db.execute(
-            select(WeeklyPoll)
-            .where(WeeklyPoll.week_start < week_start)
-            .order_by(WeeklyPoll.week_start.desc())
+            select(DailyPoll)
+            .where(DailyPoll.week_start < week_start)
+            .order_by(DailyPoll.week_start.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -248,7 +248,7 @@ async def _copy_last_week_slots(db: AsyncSession, poll: WeeklyPoll, week_start: 
     return created
 
 
-async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> WeeklyPoll | None:
+async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> DailyPoll | None:
     """Активный опрос недели; если нет — создать: слоты из config или
     автокопия прошлой недели, дедлайн = min(слоты) − VOTING_BUFFER_HOURS."""
     week_start = current_week_start()
@@ -259,7 +259,7 @@ async def ensure_weekly_poll(db: AsyncSession, now: datetime) -> WeeklyPoll | No
     cfg = await get_or_create_config(db, "poll_slots", [])
     slots_cfg = _config_slots(cfg.value)
 
-    poll = WeeklyPoll(
+    poll = DailyPoll(
         week_start=week_start,
         voting_deadline=now + timedelta(days=7),  # временное; пересчитаем ниже
         status="active",
@@ -400,7 +400,7 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
 from app.services.llm_questions import generate_personal_question  # noqa: E402
 
 
-async def ensure_personal_questions(db: AsyncSession, poll: WeeklyPoll, profiles: list[Profile]) -> int:
+async def ensure_personal_questions(db: AsyncSession, poll: DailyPoll, profiles: list[Profile]) -> int:
     """Пакетная генерация персональных вопросов (подход Б, идемпотентно).
 
     Для профилей с interests зовёт LLM; результат — upsert в poll_questions.

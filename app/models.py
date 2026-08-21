@@ -69,38 +69,24 @@ class Profile(Base):
     )
 
 
-class WeeklyPoll(Base):
-    """Еженедельный опрос времени (2. weekly_polls). Один опрос = одна неделя."""
+class DailyPoll(Base):
+    """Ежедневный опрос (2. daily_polls). Один опрос = один день."""
 
-    __tablename__ = "weekly_polls"
+    __tablename__ = "daily_polls"
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'closed', 'cancelled')", name="valid_status"),
-        CheckConstraint("reminder_interval_hours > 0", name="valid_reminder_interval"),
-        CheckConstraint("max_reminders > 0", name="valid_max_reminders"),
-        Index("idx_weekly_polls_week", "week_start"),
-        Index("idx_weekly_polls_status", "status"),
-        Index("idx_weekly_polls_deadline", "voting_deadline"),
-        Index(
-            "idx_weekly_polls_active",
-            "status",
-            "voting_deadline",
-            postgresql_where=text("status = 'active'"),
-        ),
+        CheckConstraint("status IN ('active', 'finalized', 'cancelled')", name="valid_status"),
+        Index("idx_daily_polls_date", "poll_date"),
+        Index("idx_daily_polls_status", "status"),
+        Index("idx_daily_polls_deadline", "voting_deadline"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    week_start: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
+    poll_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
     voting_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    reminder_interval_hours: Mapped[int] = mapped_column(
-        Integer, default=24, server_default=text("24"), nullable=False
-    )
-    max_reminders: Mapped[int] = mapped_column(
-        Integer, default=3, server_default=text("3"), nullable=False
-    )
     status: Mapped[str] = mapped_column(
         String(50), default="active", server_default=text("'active'"), nullable=False
     )
@@ -123,7 +109,7 @@ class PollSlot(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     poll_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+        BigInteger, ForeignKey("daily_polls.id"), nullable=False
     )
     slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     slot_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -171,7 +157,7 @@ class PollResponse(Base):
         BigInteger, ForeignKey("profiles.id"), nullable=False
     )
     poll_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+        BigInteger, ForeignKey("daily_polls.id"), nullable=False
     )
     status: Mapped[str] = mapped_column(
         String(50), default="pending", server_default=text("'pending'"), nullable=False
@@ -244,7 +230,7 @@ class MeetingInstance(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     poll_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+        BigInteger, ForeignKey("daily_polls.id"), nullable=False
     )
     selected_slot_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("poll_slots.id"), nullable=False
@@ -440,7 +426,7 @@ class PollQuestion(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     poll_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+        BigInteger, ForeignKey("daily_polls.id"), nullable=False
     )
     profile_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("profiles.id"), nullable=False

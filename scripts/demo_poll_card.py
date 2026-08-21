@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import Config, PollSlot, PollVote, PollResponse, WeeklyPoll
+from app.models import Config, PollSlot, PollVote, PollResponse, DailyPoll
 from app.services.chat_sender import send_message
 from app.services.llm_questions import generate_personal_question
 from app.services.onboarding import get_or_create_profile, current_week_start
@@ -21,7 +21,7 @@ async def main() -> None:
     async with AsyncSessionLocal() as db:
         # Удалить старый опрос недели, чтобы ensure создал новый со слотами Пн-Пт
         old = (await db.execute(
-            select(WeeklyPoll).where(WeeklyPoll.week_start == current_week_start())
+            select(DailyPoll).where(DailyPoll.week_start == current_week_start())
         )).scalar_one_or_none()
         if old is not None:
             await db.execute(delete(PollVote).where(
@@ -29,7 +29,7 @@ async def main() -> None:
             ))
             await db.execute(delete(PollSlot).where(PollSlot.poll_id == old.id))
             await db.execute(delete(PollResponse).where(PollResponse.poll_id == old.id))
-            await db.execute(delete(WeeklyPoll).where(WeeklyPoll.id == old.id))
+            await db.execute(delete(DailyPoll).where(DailyPoll.id == old.id))
             await db.commit()
 
         # Очистить конфиг слотов, чтобы ensure_weekly_poll создал дефолтные Пн-Пт

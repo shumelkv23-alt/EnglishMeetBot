@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.database import AsyncSessionLocal
-from app.models import MeetingInstance as MeetingORM, PollSlot, WeeklyPoll
+from app.models import MeetingInstance as MeetingORM, PollSlot, DailyPoll
 from app.services.invites import handle_time_finalized
 from sqlalchemy import select
 
@@ -13,7 +13,7 @@ from sqlalchemy import select
 async def main() -> None:
     async with AsyncSessionLocal() as db:
         poll = (await db.execute(
-            select(WeeklyPoll).where(WeeklyPoll.status == "active").order_by(WeeklyPoll.week_start.desc()).limit(1)
+            select(DailyPoll).where(DailyPoll.status == "active").order_by(DailyPoll.week_start.desc()).limit(1)
         )).scalar_one_or_none()
         if poll is None:
             print("NO_ACTIVE_POLL — сначала прогони scripts/test_poll_flow.py")
