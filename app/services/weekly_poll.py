@@ -49,7 +49,15 @@ def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
     return {"meetings": sorted(meetings), "suggest_to": suggest_to, "cancelled": False}
 
 
-def build_daily_poll_card(slots: list[str], action_url: str) -> dict:
+def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, int] | None = None) -> dict:
+    """Карточка ежедневного опроса: счётчики голосов + кнопки.
+
+    counts — {"15:00": N, ..., "not_available": N}; None → все нули.
+    """
+    counts = counts or {}
+    lines = [f"{t} — {counts.get(t, 0)}" for t in slots]
+    lines.append(f"Не могу — {counts.get('not_available', 0)}")
+
     buttons = []
     for t in slots:
         buttons.append({
@@ -78,7 +86,10 @@ def build_daily_poll_card(slots: list[str], action_url: str) -> dict:
             "card": {
                 "header": {"title": "Кто сегодня и во сколько? 🗓️",
                            "subtitle": "Выбери время или «не могу»"},
-                "sections": [{"widgets": [{"buttonList": {"buttons": buttons}}]}],
+                "sections": [
+                    {"widgets": [{"textParagraph": {"text": "\n".join(lines)}}]},
+                    {"widgets": [{"buttonList": {"buttons": buttons}}]},
+                ],
             },
         }]
     }

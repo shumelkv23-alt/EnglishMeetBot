@@ -73,7 +73,29 @@ def test_slot_datetime_carrier_date():
 
 def test_build_daily_poll_card_has_four_buttons():
     card = build_daily_poll_card(["15:00", "16:00", "17:00"], action_url="https://x/hook")
-    buttons = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"]
+    buttons = card["cardsV2"][0]["card"]["sections"][1]["widgets"][0]["buttonList"]["buttons"]
     labels = [b["text"] for b in buttons]
     assert labels == ["15:00", "16:00", "17:00", "Не могу сегодня"]
     assert all(b["onClick"]["action"]["function"] == "https://x/hook" for b in buttons)
+
+
+def test_build_daily_poll_card_shows_counts():
+    card = build_daily_poll_card(
+        ["15:00", "16:00", "17:00"],
+        "https://x/hook",
+        {"15:00": 4, "16:00": 2, "17:00": 1, "not_available": 0},
+    )
+    sections = card["cardsV2"][0]["card"]["sections"]
+    counts_text = sections[0]["widgets"][0]["textParagraph"]["text"]
+    assert "15:00 — 4" in counts_text
+    assert "16:00 — 2" in counts_text
+    assert "Не могу — 0" in counts_text
+    # кнопки остались во второй секции
+    buttons = sections[1]["widgets"][0]["buttonList"]["buttons"]
+    assert [b["text"] for b in buttons] == ["15:00", "16:00", "17:00", "Не могу сегодня"]
+
+
+def test_build_daily_poll_card_defaults_to_zero():
+    card = build_daily_poll_card(["15:00"], "https://x/hook")
+    text = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "15:00 — 0" in text
