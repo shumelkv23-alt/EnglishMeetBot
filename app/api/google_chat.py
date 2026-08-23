@@ -148,12 +148,16 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
                 )
                 result = await submit_poll(db, profile, form_inputs)
                 if result.get("ok") and message_name:
-                    poll = await active_daily_poll(db, today())
-                    if poll is not None:
-                        slots, counts = await poll_counts(db, poll.id)
-                        updated_card = build_daily_poll_card(
-                            slots, settings.chat_app_audience, counts,
-                        )
+                    try:
+                        poll = await active_daily_poll(db, today())
+                        if poll is not None:
+                            slots, counts = await poll_counts(db, poll.id)
+                            updated_card = build_daily_poll_card(
+                                slots, settings.chat_app_audience, counts,
+                            )
+                    except Exception:
+                        # голос уже записан — карточку просто не обновим
+                        logger.exception("daily_poll_card_build_failed")
         except Exception:
             logger.exception("daily_poll_submit_failed")
             result = {"ok": False, "reason": "db_error"}
