@@ -549,6 +549,22 @@ def _addon_response(message: dict) -> JSONResponse:
     )
 
 
+def _addon_update_message(message_name: str, card: dict) -> JSONResponse:
+    """Ответ updateMessageAction: обновить карточку на месте (add-on формат)."""
+    return JSONResponse(content={
+        "hostAppDataAction": {
+            "chatDataAction": {
+                "updateMessageAction": {
+                    "message": {
+                        "name": message_name,
+                        "cardsV2": card.get("cardsV2"),
+                    }
+                }
+            }
+        }
+    })
+
+
 @router.post("/google-chat")
 async def handle_google_chat_webhook(request: Request) -> JSONResponse:
     # 1. Аутентификация: Google подписывает каждый запрос JWT в заголовке Authorization
