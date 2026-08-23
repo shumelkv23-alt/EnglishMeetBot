@@ -98,7 +98,7 @@ def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, i
 # --- БД-часть (интеграционная) ---
 from datetime import date, timezone  # noqa: E402
 
-from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.models import (  # noqa: E402
@@ -265,3 +265,21 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
 
     await db.commit()
     return {"ok": True, "reason": "saved"}
+
+
+async def poll_counts(db: AsyncSession, poll_id: int) -> tuple[list[str], dict[str, int]]:
+    """Счётчики голосов опроса: (слоты по возрастанию, {время -> голоса} + not_available)."""
+    slots = (
+        await db.execute(select(PollSlot).where(PollSlot.poll_id == poll_id).order_by(PollSlot.slot_start))
+    ).scalars().all()
+    slot_times = [s.slot_start.strftime("%H:%M") for s in slots]
+    counts = {t: (s.votes_count or 0) for t, s in zip(slot_times, slots)}
+    na = (
+        await db.execute(
+            select(func.count()).select_from(PollResponse).where(
+                PollResponse.poll_id == poll_id, PollResponse.status == "not_available"
+            )
+        )
+    ).scalar_one()
+    counts["not_available"] = na
+    return slot_times, counts

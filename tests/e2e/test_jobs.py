@@ -120,3 +120,18 @@ async def test_checkin_outside_window_stays_pending(db, today_poll):
         )
     ).scalar_one()
     assert att.status == "pending"
+
+
+async def test_poll_counts_reflects_votes(db, today_poll):
+    from app.services.weekly_poll import poll_counts
+
+    p = await get_or_create_profile(db, "users/e2e_counts")
+    await submit_poll(db, p, FORM_1500)  # голос за 15:00
+    na = await get_or_create_profile(db, "users/e2e_counts_na")
+    await submit_poll(db, na, {"time": {"stringInputs": {"value": ["not_available"]}}})
+
+    slots, counts = await poll_counts(db, today_poll.id)
+    assert slots == ["15:00", "16:00", "17:00"]
+    assert counts["15:00"] == 1
+    assert counts["16:00"] == 0
+    assert counts["not_available"] == 1
