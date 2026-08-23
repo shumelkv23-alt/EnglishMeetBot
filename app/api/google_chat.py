@@ -437,6 +437,7 @@ async def _register_contact(chat_data: dict, space_name: str) -> None:
         # в классическом — на верхнем уровне (event["space"]).
         payload = chat_data.get("addedToSpacePayload")
         space = payload.get("space") if isinstance(payload, dict) else chat_data.get("space")
+        logger.info("register_contact space=%r is_dm=%s", space, _space_is_dm(space))
         dm_space = space_name if _space_is_dm(space) else None
         try:
             async with AsyncSessionLocal() as db:
@@ -476,7 +477,10 @@ async def _run_onboarding(space_name: str, space: dict) -> dict:
         async with AsyncSessionLocal() as db:
             # config["space_id"] — id ГРУППЫ для джоб; DM-пространство не фиксируем
             if not _space_is_dm(space):
-                await get_or_create_config(db, "space_id", space_name)
+                cfg = await get_or_create_config(db, "space_id", space_name)
+                if cfg.value != space_name:
+                    cfg.value = space_name
+                    await db.commit()
             plan = await onboard_space_members(db, space_name)
     except Exception:
         # Сбой планирования не должен ронять обработку события
