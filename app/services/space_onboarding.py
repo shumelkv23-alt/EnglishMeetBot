@@ -10,17 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Profile
 
 
-def plan_onboarding(profiles_by_ws: dict[str, bool], members: list[str]) -> dict:
+def plan_onboarding(profiles_by_ws: dict[str, str | None], members: list[str]) -> dict:
     """Распределение участников по каналам онбординга.
 
     members — workspace_user_id участников группы ('users/...');
-    profiles_by_ws — True, если у участника уже есть DM с ботом (chat_space_id)
-    и онбординг ещё не пройден.
+    profiles_by_ws — статус участника (workspace_user_id -> статус):
+      "done"    — онбординг уже пройден, не трогаем;
+      "dm"      — есть DM с ботом, анкету не заполнял → анкета в личку;
+      "mention" — нет DM с ботом → @упоминание в группу;
+      None      — профиля нет → @упоминание (попросить написать в личку).
 
     Возвращает {'dm': [...], 'mention': [...]}.
     """
-    dm = [m for m in members if profiles_by_ws.get(m)]
-    mention = [m for m in members if not profiles_by_ws.get(m)]
+    dm = [m for m in members if profiles_by_ws.get(m) == "dm"]
+    mention = [m for m in members if profiles_by_ws.get(m) in ("mention", None)]
     return {"dm": dm, "mention": mention}
 
 
@@ -44,8 +47,12 @@ async def onboard_space_members(db: AsyncSession, space_name: str) -> dict:
     profiles = (
         await db.execute(select(Profile).where(Profile.workspace_user_id.in_(member_ids)))
     ).scalars().all()
-    by_ws = {
-        p.workspace_user_id: bool(p.chat_space_id and not p.onboarding_completed)
-        for p in profiles
-    }
+    by_ws: dict[str, str | None] = {}
+    for p in profiles:
+        if p.onboarding_completed:
+            by_ws[p.workspace_user_id] = "done"
+        elif p.chat_space_id:
+            by_ws[p.workspace_user_id] = "dm"
+        else:
+            by_ws[p.workspace_user_id] = "mention"
     return plan_onboarding(by_ws, member_ids)
