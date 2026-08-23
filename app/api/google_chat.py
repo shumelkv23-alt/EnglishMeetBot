@@ -118,11 +118,11 @@ async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
     return {"text": "Не получилось сохранить ответы — заполни хотя бы что-нибудь и нажми «Отправить»."}
 
 
-async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
-    """Обработать клик по кнопке ежедневного опроса (add-on и classic формат).
+async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | None = None) -> JSONResponse:
+    """Обработать клик по кнопке ежедневного опроса.
 
-    Кнопки карточки шлют время в action.parameters, а не в formInputs —
-    перекладываем его в formInputs, чтобы submit_poll нашёл слот по ключу "time".
+    При успехе и наличии message_name — обновляет карточку счётчиками
+    (updateMessageAction), иначе/при закрытии — текст (createMessageAction).
     """
     form_inputs = common.get("formInputs", {}) or {}
     params = common.get("parameters") or {}
@@ -133,6 +133,7 @@ async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
     user = chat_data.get("user", {})
     workspace_user_id = user.get("name", "")
     result = {"ok": False, "reason": "no_user"}
+    updated_card = None
     if workspace_user_id:
         try:
             space = _extract_space_dict(chat_data)
@@ -142,16 +143,27 @@ async def _submit_daily_poll(chat_data: dict, common: dict) -> dict:
                     email=user.get("email"), display_name=user.get("displayName"),
                     chat_space_id=_dm_space_name(space),
                 )
-                from app.services.weekly_poll import submit_poll
+                from app.services.weekly_poll import (
+                    active_daily_poll, build_daily_poll_card, poll_counts, submit_poll, today,
+                )
                 result = await submit_poll(db, profile, form_inputs)
+                if result.get("ok") and message_name:
+                    poll = await active_daily_poll(db, today())
+                    if poll is not None:
+                        slots, counts = await poll_counts(db, poll.id)
+                        updated_card = build_daily_poll_card(
+                            slots, settings.chat_app_audience, counts,
+                        )
         except Exception:
             logger.exception("daily_poll_submit_failed")
             result = {"ok": False, "reason": "db_error"}
     if result.get("ok"):
-        return {"text": "Спасибо, учёл! 🙌"}
+        if updated_card is not None and message_name:
+            return _addon_update_message(message_name, updated_card)
+        return _addon_response({"text": "Спасибо, учёл! 🙌"})
     if result.get("reason") == "closed":
-        return {"text": "Голосование уже закрыто — итог объявлен."}
-    return {"text": "Не получилось сохранить — попробуй ещё раз."}
+        return _addon_response({"text": "Голосование уже закрыто — итог объявлен."})
+    return _addon_response({"text": "Не получилось сохранить — попробуй ещё раз."})
 
 
 async def _submit_onboarding(user: dict, space: dict, form_inputs: dict) -> dict:
@@ -601,7 +613,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
             if method == "submit_daily_poll":
-                return _addon_response(await _submit_daily_poll(chat_data, common))
+                message_name = (chat_data.get("buttonClickedPayload", {}).get("message") or {}).get("name")
+                return await _submit_daily_poll(chat_data, common, message_name=message_name)
             if method == "checkin_present":
                 return _addon_response(await _handle_checkin_present(chat_data, common))
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
@@ -724,11 +737,13 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 if isinstance(p, dict) and p.get("key"):
                     params[p.get("key")] = p.get("value")
             form_inputs = event.get("common", {}).get("formInputs", {})
+            message_name = (event.get("message") or {}).get("name")
             response_msg = await _submit_daily_poll(
                 {"user": user, "space": space},
                 {"formInputs": form_inputs, "parameters": params},
+                message_name=message_name,
             )
-            return _addon_response(response_msg)
+            return response_msg
         if function_name == "checkin_submit" or method == "checkin_present":
             user = event.get("user", {})
             space_name = event.get("space", {}).get("name", "")
