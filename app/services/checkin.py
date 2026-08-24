@@ -22,8 +22,8 @@ def job_ids(instance_id: str) -> dict:
 def build_checkin_card(instance_id: str, action_url: str = "") -> dict:
     """Карточка с кнопкой «Я на встрече ✅» (для отправки при открытии окна).
 
-    action_url — URL вебхука (chat_app_audience): в Chat Card API action.function
-    это URL, а не имя функции (метод приходит через parameters).
+    action_url — URL эндпоинта. В режиме Workspace Add-on кнопка доставляет клик
+    только если action.function = URL (метод приходит через parameters["method"]).
     """
     return {
         "cardsV2": [
@@ -68,18 +68,28 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Attendance, MeetingInstance as MeetingORM, Profile
+from app.models import Attendance, Config, MeetingInstance as MeetingORM, Profile
 
 logger = logging.getLogger(__name__)
 
 
-async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, window_min: int = 15) -> dict:
-    """Записать self-check-in, только если сейчас в окне встречи (REQ-9.6)."""
+async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, window_min: int | None = None) -> dict:
+    """Записать self-check-in, если в окне встречи; начислить баллы за присутствие.
+
+    window_min берётся из config['checkin_window_minutes'], если не передан явно.
+    Возвращает {'ok', 'within', 'points'}.
+    """
     meeting = (
         await db.execute(select(MeetingORM).where(MeetingORM.id == instance_id, MeetingORM.status == "scheduled"))
     ).scalar_one_or_none()
     if meeting is None:
-        return {"ok": False, "reason": "no_meeting"}
+        return {"ok": False, "reason": "no_meeting", "points": 0}
+
+    if window_min is None:
+        cfg = (
+            await db.execute(select(Config).where(Config.key == "checkin_window_minutes"))
+        ).scalar_one_or_none()
+        window_min = int(cfg.value or 15) if cfg is not None else 15
 
     open_at, close_at = checkin_window(meeting.scheduled_start, window_min)
     now = datetime.now(timezone.utc)
@@ -109,6 +119,12 @@ async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, w
         if within:
             attendance.status = "present"
 
+    points = 0
+    if within:
+        from app.services.leaderboard import award_attendance
+
+        points = await award_attendance(db, profile.id, instance_id)
+
     await db.commit()
-    logger.info("checkin_submitted profile=%s instance=%s within=%s", profile.id, instance_id, within)
-    return {"ok": True, "within": within}
+    logger.info("checkin_submitted profile=%s instance=%s within=%s points=%s", profile.id, instance_id, within, points)
+    return {"ok": True, "within": within, "points": points}

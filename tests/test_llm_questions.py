@@ -24,12 +24,14 @@ def test_generate_success(monkeypatch):
                 pass
 
             def json(self):
-                return {"choices": [{"message": {"content": '{"question_text": "Хобби?"}'}}]}
+                return {"content": [{"type": "text", "text": '{"question_text": "Хобби?"}'}]}
 
         return R()
 
     monkeypatch.setattr("app.services.llm_questions.requests.post", fake_post)
-    q = generate_personal_question(["кино"], api_key="sk-test", model="m/x")
+    q = generate_personal_question(
+        ["кино"], api_key="sk-test", model="m/x", base_url="https://test.local"
+    )
     assert q == "Хобби?"
 
 
@@ -44,7 +46,10 @@ def test_generate_http_error_returns_none(monkeypatch):
         return R()
 
     monkeypatch.setattr("app.services.llm_questions.requests.post", fake_post)
-    assert generate_personal_question(["кино"], api_key="sk-test") is None
+    assert (
+        generate_personal_question(["кино"], api_key="sk-test", base_url="https://test.local")
+        is None
+    )
 
 
 def test_generate_without_key_skips_network():

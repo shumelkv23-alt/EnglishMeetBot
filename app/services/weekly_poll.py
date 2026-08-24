@@ -49,11 +49,19 @@ def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
     return {"meetings": sorted(meetings), "suggest_to": suggest_to, "cancelled": False}
 
 
-def build_daily_poll_card(slots: list[str], action_url: str) -> dict:
+def build_daily_poll_card(slots: list[str], action_url: str, votes: dict[str, int] | None = None) -> dict:
+    """Карточка ежедневного опроса. votes — {time: N} для счётчика голосов.
+
+    При наличии votes кнопки показывают «15:00 (2)»; значение клика по-прежнему
+    идёт в parameters["time"] (без счётчика).
+    """
+    votes = votes or {}
     buttons = []
     for t in slots:
+        n = votes.get(t, 0)
+        label = f"{t} ({n})" if n else t
         buttons.append({
-            "text": t,
+            "text": label,
             "onClick": {"action": {
                 "function": action_url or "submit_daily_poll",
                 "parameters": [
@@ -90,6 +98,7 @@ from datetime import date, timezone  # noqa: E402
 from sqlalchemy import delete, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
+from app.config import APP_TZ  # noqa: E402
 from app.models import (  # noqa: E402
     Config,
     DailyPoll,
@@ -155,7 +164,7 @@ async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None
 
     poll = DailyPoll(
         poll_date=day,
-        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=timezone.utc),
+        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=APP_TZ),
         status="active",
     )
     db.add(poll)
@@ -176,7 +185,8 @@ async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None
 async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
     """Подвести итог дня: создать встречи для времён, набравших порог.
 
-    Возвращает {"result": resolve_day_result(...), "space_id": из config}.
+    Возвращает {"result": resolve_day_result(...), "space_id": из config,
+    "meetings": [{"id", "day", "time", "scheduled_start"}, ...]}.
     """
     slots = (await db.execute(
         select(PollSlot).where(PollSlot.poll_id == poll.id)
@@ -189,22 +199,36 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
     result = resolve_day_result(votes, quorum)
 
     slot_by_time = {s.slot_start.strftime("%H:%M"): s for s in slots}
+    created = []
     for t in result["meetings"]:
         slot_time = slot_datetime(t).time()
-        scheduled_start = datetime.combine(poll.poll_date, slot_time, tzinfo=timezone.utc)
-        db.add(MeetingInstance(
+        scheduled_start = datetime.combine(poll.poll_date, slot_time, tzinfo=APP_TZ)
+        meeting = MeetingInstance(
             poll_id=poll.id,
             selected_slot_id=slot_by_time[t].id,
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_start + timedelta(minutes=60),
             location="Онлайн (Meet)",
             status="scheduled",
-        ))
+        )
+        db.add(meeting)
+        created.append(meeting)
     poll.status = "finalized" if result["meetings"] else "cancelled"
     poll.closed_at = datetime.now(timezone.utc)
+    await db.flush()  # присваиваем id созданным встречам (нужны для invites)
+
+    meetings_out = [
+        {
+            "id": m.id,
+            "day": m.scheduled_start.strftime("%a"),
+            "time": m.scheduled_start.strftime("%H:%M"),
+            "scheduled_start": m.scheduled_start,
+        }
+        for m in created
+    ]
     await db.commit()
     space_id = (await get_or_create_config(db, "space_id", "")).value or ""
-    return {"result": result, "space_id": space_id}
+    return {"result": result, "space_id": space_id, "meetings": meetings_out}
 
 
 async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> dict:
@@ -254,3 +278,12 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
 
     await db.commit()
     return {"ok": True, "reason": "saved"}
+
+
+async def build_daily_poll_card_with_counts(db: AsyncSession, poll: DailyPoll, action_url: str) -> dict:
+    """Карточка опроса с актуальными счётчиками голосов (слоты из БД)."""
+    slots = (await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id))).scalars().all()
+    slots = sorted(slots, key=lambda s: s.slot_start)
+    times = [s.slot_start.strftime("%H:%M") for s in slots]
+    votes = {s.slot_start.strftime("%H:%M"): (s.votes_count or 0) for s in slots}
+    return build_daily_poll_card(times, action_url, votes)

@@ -38,6 +38,7 @@ from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.messaging import send_message
 from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
+from app.services.chat_sender import send_message as send_space_message
 from app.schemas import MessagePayload
 from app.services.checkin import checkin_window, build_checkin_card, job_ids as checkin_job_ids
 from app.services.invites import _theme_from_activity  # noqa: F401  (переэкспорт для API)
@@ -95,11 +96,11 @@ async def handle_time_finalized(
 
     space_id = await _config_value(db, "space_id", "")
     if space_id:
-        send_message(space_id, MessagePayload(text=f"🗓️ {text}"))
+        send_space_message(space_id, text=f"🗓️ {text}")
 
     sch = _scheduler()
     if scheduled_start is not None and sch is not None:
-        lead_hours = int(await _config_value(db, "meet_reminder_hours", 1) or 1)
+        lead_hours = int(await _config_value(db, "meeting_reminder_hours", 1) or 1)
         sch.add_job(
             _send_reminder, "date",
             run_date=reminder_at(scheduled_start, lead_hours),
@@ -107,7 +108,7 @@ async def handle_time_finalized(
             replace_existing=True,
             args=[str(instance_id)],
         )
-        window_min = int(await _config_value(db, "checkin_window_min", 15) or 15)
+        window_min = int(await _config_value(db, "checkin_window_minutes", 15) or 15)
         open_at, close_at = checkin_window(scheduled_start, window_min)
         sch.add_job(
             _open_checkin, "date", run_date=open_at,
@@ -160,7 +161,11 @@ async def _send_reminder(instance_id: str) -> None:
 def _open_checkin(space_id: str, card: dict) -> None:
     """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space."""
     if space_id:
-        send_message(space_id, MessagePayload(text="Встреча начинается — отметься! ✅", card=card))
+        send_space_message(
+            space_id,
+            text="Встреча начинается — отметься! ✅",
+            cards_v2=card.get("cardsV2"),
+        )
 
 
 def _close_checkin() -> None:

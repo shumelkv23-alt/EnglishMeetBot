@@ -65,6 +65,41 @@ def send_message(
     return resp.json()
 
 
+def patch_message(
+    message_name: str,
+    text: str | None = None,
+    cards_v2: list[dict] | None = None,
+) -> dict:
+    """Обновить существующее сообщение на месте (messages.patch).
+
+    message_name — имя вида 'spaces/XXX/messages/YYY' (из resp['name'] от send_message).
+    updateMask строится по тому, какие поля переданы (text и/или cardsV2).
+    """
+    creds = _bot_credentials()
+    update_fields: list[str] = []
+    body: dict = {}
+    if text is not None:
+        body["text"] = text
+        update_fields.append("text")
+    if cards_v2 is not None:
+        body["cardsV2"] = cards_v2
+        update_fields.append("cardsV2")
+    if not update_fields:
+        return {}
+    resp = requests.patch(
+        f"{CHAT_API_BASE}/{message_name}",
+        params={"updateMask": ",".join(update_fields)},
+        headers={"Authorization": f"Bearer {creds.token}"},
+        json=body,
+        timeout=15,
+    )
+    if not resp.ok:
+        logger.error("chat_patch_error status=%s body=%s", resp.status_code, resp.text)
+    resp.raise_for_status()
+    logger.info("message_patched name=%s status=%s", message_name, resp.status_code)
+    return resp.json()
+
+
 def list_space_members(space_name: str) -> list[dict]:
     """Список участников пространства (memberships).
 

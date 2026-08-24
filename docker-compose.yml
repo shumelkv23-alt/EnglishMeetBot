@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,12 +25,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DB_HOST: db 
+      DB_HOST: db
       APP_ENV: production
       LOG_LEVEL: INFO
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      CHAT_APP_AUDIENCE: ${CHAT_APP_AUDIENCE}
+      SKIP_JWT_VALIDATION: ${SKIP_JWT_VALIDATION}
+      GOOGLE_SA_KEY_FILE: ${GOOGLE_SA_KEY_FILE}
+      CHAT_TEST_SPACE: ${CHAT_TEST_SPACE}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_MODEL: ${LLM_MODEL}
+    volumes:
+      - ./sa-key.json:/app/sa-key.json:ro
     depends_on:
       db:
         condition: service_healthy

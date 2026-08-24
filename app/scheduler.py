@@ -8,7 +8,7 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timezone
 
-from app.config import get_settings
+from app.config import APP_TZ, get_settings
 from app.database import AsyncSessionLocal
 from app.services.chat_sender import send_message as send_space_message
 
@@ -20,7 +20,7 @@ scheduler: AsyncIOScheduler | None = None
 async def _run_daily_poll() -> None:
     """Джоб 9:00 — создать опрос дня и отправить карточку в группу."""
     from app.services.weekly_poll import (
-        build_daily_poll_card,
+        build_daily_poll_card_with_counts,
         ensure_daily_poll,
         get_or_create_config,
     )
@@ -30,8 +30,7 @@ async def _run_daily_poll() -> None:
         poll = await ensure_daily_poll(db, now)
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
         if poll is not None and space_id:
-            slots = ["15:00", "16:00", "17:00"]
-            card = build_daily_poll_card(slots, get_settings().chat_app_audience)
+            card = await build_daily_poll_card_with_counts(db, poll, get_settings().chat_app_audience)
             send_space_message(
                 space_id,
                 text="Кто сегодня и во сколько? 🗓️",
@@ -43,7 +42,8 @@ async def _run_daily_poll() -> None:
 
 
 async def _finalize_daily_poll() -> None:
-    """Джоб 14:05 — подвести итог опроса дня и оповестить группу."""
+    """Джоб 14:05 — подвести итог опроса дня, разослать приглашения и джобы ENG-7."""
+    from app.services.invites import handle_time_finalized
     from app.services.weekly_poll import active_daily_poll, finalize_daily_poll
 
     async with AsyncSessionLocal() as db:
@@ -54,18 +54,54 @@ async def _finalize_daily_poll() -> None:
         outcome = await finalize_daily_poll(db, poll)
         result = outcome["result"]
         space_id = outcome.get("space_id") or ""
-        if not space_id:
-            logger.info("daily_finalize_job done poll=%s status=%s (space_id не задан)",
-                        poll.id, poll.status)
-            return
+
         if result["meetings"]:
-            for t in result["meetings"]:
-                send_space_message(space_id, text=f"Встреча сегодня в {t} 🎉")
-            for choice, target in result["suggest_to"].items():
-                send_space_message(space_id, text=f"Тем, кто выбрал {choice} — встреча также в {target}")
+            # Личные приглашения + пост в группу + напоминание/чек-ин (ENG-7)
+            for m in outcome.get("meetings", []):
+                await handle_time_finalized(
+                    db, m["id"], m["day"], m["time"],
+                    activity=None, scheduled_start=m["scheduled_start"],
+                )
+            if space_id:
+                for choice, target in result["suggest_to"].items():
+                    send_space_message(space_id, text=f"Тем, кто выбрал {choice} — встреча также в {target}")
         else:
-            send_space_message(space_id, text="Сегодня встреча не набирается — отмена")
+            if space_id:
+                send_space_message(space_id, text="Сегодня встреча не набирается — отмена")
         logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
+
+
+async def _run_weekly_questions() -> None:
+    """Джоб воскресенье 12:00 — еженедельные вопросы в личку каждому участнику."""
+    from sqlalchemy import select
+
+    from app.models import Profile
+    from app.services.weekly_questions import send_weekly_questions
+
+    async with AsyncSessionLocal() as db:
+        profiles = (
+            await db.execute(
+                select(Profile).where(
+                    Profile.chat_space_id.isnot(None),
+                    Profile.is_active.is_(True),
+                )
+            )
+        ).scalars().all()
+        sent = 0
+        for p in profiles:
+            try:
+                if await send_weekly_questions(db, p):
+                    sent += 1
+            except Exception:
+                logger.exception("weekly_questions_failed profile=%s", p.id)
+        logger.info("weekly_questions_sent count=%s", sent)
+
+
+async def _run_close_stale_games() -> None:
+    """Джоб каждые 30 сек — закрыть просроченные фазы игр (Quiplash/«Кто я?»)."""
+    from app.services.games import close_stale_games
+
+    await close_stale_games()
 
 
 def init_scheduler() -> None:
@@ -73,7 +109,7 @@ def init_scheduler() -> None:
     global scheduler
     if scheduler is not None:
         return
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler = AsyncIOScheduler(timezone=APP_TZ)
     scheduler.add_job(
         _run_daily_poll,
         "cron",
@@ -91,6 +127,25 @@ def init_scheduler() -> None:
         id="daily-finalize",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_weekly_questions,
+        "cron",
+        day_of_week="sun",
+        hour=12,
+        minute=0,
+        id="weekly-questions",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_close_stale_games,
+        "interval",
+        seconds=30,
+        id="close-stale-games",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
     )
     scheduler.start()
     logger.info("scheduler_started")

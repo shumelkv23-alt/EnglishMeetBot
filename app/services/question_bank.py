@@ -29,12 +29,28 @@ BANK: list[str] = [
 ]
 
 
-def bank_questions_for(week_start: date) -> list[str]:
-    """Два детерминированных вопроса недели (основной + запасной).
+def bank_questions_for(week_start: date, exclude: set[str] | None = None) -> list[str]:
+    """Два вопроса недели (основной + запасной), не пересекающиеся с `exclude`.
 
-    Основной — для всех участников; запасной — используется как замена
-    персонального LLM-вопроса, если генерация не удалась (фолбэк REQ-10).
-    Индекс — ISO-номер недели по модулю длины банка.
+    Основной — для всех участников; запасной — как замена персонального
+    LLM-вопроса (фолбэк REQ-10). Индекс — ISO-номер недели по модулю длины
+    банка. `exclude` — уже заданные участнику вопросы: их пропускаем, идя по
+    банку вперёд от детерминированного индекса.
     """
+    exclude = exclude or set()
     index = week_start.isocalendar().week % len(BANK)
-    return [BANK[index], BANK[(index + 1) % len(BANK)]]
+    result: list[str] = []
+    for offset in range(len(BANK)):
+        q = BANK[(index + offset) % len(BANK)]
+        if q not in exclude and q not in result:
+            result.append(q)
+        if len(result) >= 2:
+            break
+    # Если исключён весь банк (маловероятно) — добиваем из начала без повторов.
+    if len(result) < 2:
+        for q in BANK:
+            if q not in result:
+                result.append(q)
+            if len(result) >= 2:
+                break
+    return result
