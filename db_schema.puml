@@ -1,0 +1,205 @@
+@startuml english-meet-bot
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+hide circle
+
+entity "profiles" as profiles {
+  * id : BIGINT <<PK>>
+  --
+  * user_email : VARCHAR(255) <<UNIQUE>>
+  user_name : VARCHAR(255)
+  workspace_user_id : VARCHAR(255) <<UNIQUE>>
+  chat_space_id : VARCHAR(255)
+  * onboarding_completed : BOOLEAN <<DEFAULT false>>
+  onboarding_answers : JSONB
+  english_level : VARCHAR(50)
+  interests : TEXT[]
+  preferred_days : VARCHAR(100)[]
+  * public_consent : BOOLEAN <<DEFAULT false>>
+  * anonymize_answers : BOOLEAN <<DEFAULT true>>
+  * is_active : BOOLEAN <<DEFAULT true>>
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "weekly_polls" as weekly_polls {
+  * id : BIGINT <<PK>>
+  --
+  * week_start : DATE <<UNIQUE>>
+  * voting_deadline : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+  closed_at : TIMESTAMPTZ
+  * reminder_interval_hours : INTEGER <<DEFAULT 24>>
+  * max_reminders : INTEGER <<DEFAULT 3>>
+  * status : VARCHAR(50) <<DEFAULT 'active'>>
+  --
+  <<CHECK status IN ('active', 'closed', 'cancelled')>>
+  <<CHECK reminder_interval_hours > 0>>
+  <<CHECK max_reminders > 0>>
+}
+
+entity "poll_slots" as poll_slots {
+  * id : BIGINT <<PK>>
+  --
+  * poll_id : BIGINT <<FK>>
+  * slot_start : TIMESTAMPTZ
+  * slot_end : TIMESTAMPTZ
+  * location : VARCHAR(255)
+  * priority : INTEGER <<DEFAULT 0>>
+  * votes_count : INTEGER <<DEFAULT 0>>
+  * created_at : TIMESTAMPTZ
+  --
+  <<CHECK slot_start < slot_end>>
+  <<CHECK priority >= 0>>
+  <<CHECK votes_count >= 0>>
+}
+
+entity "poll_responses" as poll_responses {
+  * id : BIGINT <<PK>>
+  --
+  * profile_id : BIGINT <<FK>>
+  * poll_id : BIGINT <<FK>>
+  * status : VARCHAR(50) <<DEFAULT 'pending'>>
+  responded_at : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+  * reminder_count : INTEGER <<DEFAULT 0>>
+  last_reminder_at : TIMESTAMPTZ
+  next_reminder_at : TIMESTAMPTZ
+  --
+  <<UNIQUE (profile_id, poll_id)>>
+  <<CHECK status IN ('pending', 'responded', 'skipped')>>
+  <<CHECK reminder_count >= 0>>
+}
+
+entity "poll_votes" as poll_votes {
+  * id : BIGINT <<PK>>
+  --
+  * poll_response_id : BIGINT <<FK>>
+  * profile_id : BIGINT <<FK>>
+  * poll_slot_id : BIGINT <<FK>>
+  * voted_at : TIMESTAMPTZ
+  --
+  <<UNIQUE (profile_id, poll_slot_id)>>
+}
+
+entity "meeting_instances" as meeting_instances {
+  * id : BIGINT <<PK>>
+  --
+  * poll_id : BIGINT <<FK>>
+  * selected_slot_id : BIGINT <<FK>>
+  * scheduled_start : TIMESTAMPTZ
+  * scheduled_end : TIMESTAMPTZ
+  * location : VARCHAR(255)
+  * status : VARCHAR(50) <<DEFAULT 'scheduled'>>
+  activity_type : VARCHAR(100)
+  activity_data : JSONB
+  * participants_count : INTEGER <<DEFAULT 0>>
+  * created_at : TIMESTAMPTZ
+  completed_at : TIMESTAMPTZ
+  --
+  <<CHECK scheduled_start < scheduled_end>>
+  <<CHECK status IN ('scheduled', 'completed', 'cancelled')>>
+  <<CHECK participants_count >= 0>>
+}
+
+entity "answers" as answers {
+  * id : BIGINT <<PK>>
+  --
+  * profile_id : BIGINT <<FK>>
+  meeting_instance_id : BIGINT <<FK>>
+  * question_text : TEXT
+  answer_text : TEXT
+  answer_choice : VARCHAR(255)
+  * is_public : BOOLEAN <<DEFAULT true>>
+  * answered_at : TIMESTAMPTZ
+  * week_start : DATE
+  question_rotation_id : INTEGER
+  --
+  <<CHECK (answer_text IS NOT NULL AND answer_choice IS NULL)
+     OR (answer_text IS NULL AND answer_choice IS NOT NULL)
+     OR (answer_text IS NOT NULL AND answer_choice IS NOT NULL)>>
+}
+
+entity "attendance" as attendance {
+  * id : BIGINT <<PK>>
+  --
+  * profile_id : BIGINT <<FK>>
+  * meeting_instance_id : BIGINT <<FK>>
+  * source : VARCHAR(50)
+  * status : VARCHAR(50) <<DEFAULT 'pending'>>
+  checkin_attempted_at : TIMESTAMPTZ
+  is_within_window : BOOLEAN
+  checked_in_by : BIGINT <<FK>>
+  notes : TEXT
+  * recorded_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+  --
+  <<UNIQUE (profile_id, meeting_instance_id)>>
+  <<CHECK source IN ('self_checkin', 'manual')>>
+  <<CHECK status IN ('pending', 'present', 'absent')>>
+}
+
+entity "leaderboard_ledger" as leaderboard_ledger {
+  * id : BIGINT <<PK>>
+  --
+  * profile_id : BIGINT <<FK>>
+  meeting_instance_id : BIGINT <<FK>>
+  * event_type : VARCHAR(100)
+  * points : INTEGER
+  reason : TEXT
+  metadata : JSONB
+  * event_date : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+  --
+  <<UNIQUE (profile_id, meeting_instance_id, event_type)>>
+  <<CHECK event_type IN ('attendance', 'answer', 'streak', 'mvp', 'bonus')>>
+  <<CHECK points != 0>>
+}
+
+entity "config" as config {
+  * key : VARCHAR(255) <<PK>>
+  --
+  * value : JSONB
+  description : TEXT
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "poll_questions" as poll_questions {
+  * id : BIGINT <<PK>>
+  --
+  * poll_id : BIGINT <<FK>>
+  * profile_id : BIGINT <<FK>>
+  * question_text : TEXT
+  * created_at : TIMESTAMPTZ
+  --
+  <<UNIQUE (poll_id, profile_id)>>
+}
+
+' === Relationships ===
+
+profiles ||--o{ poll_responses : "отвечает на"
+profiles ||--o{ poll_votes : "голосует за"
+profiles ||--o{ attendance : "посещает"
+profiles ||--o{ leaderboard_ledger : "набирает баллы"
+profiles ||--o{ answers : "отвечает на"
+profiles ||--o{ poll_questions : "задаёт"
+profiles ||--o{ attendance : "помечает (checked_in_by)"
+
+weekly_polls ||--o{ poll_slots : "содержит"
+weekly_polls ||--o{ poll_responses : "получает"
+weekly_polls ||--o{ meeting_instances : "создаёт"
+weekly_polls ||--o{ poll_questions : "содержит"
+
+poll_slots ||--o{ poll_votes : "получает"
+
+poll_responses ||--o{ poll_votes : "содержит"
+
+meeting_instances ||--o{ attendance : "имеет"
+meeting_instances ||--o{ answers : "содержит"
+meeting_instances ||--o{ leaderboard_ledger : "учитывается в"
+
+poll_slots }o--|| meeting_instances : "выбран как (selected_slot_id)"
+
+@enduml

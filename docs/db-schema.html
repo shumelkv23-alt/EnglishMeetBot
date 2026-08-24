@@ -1,0 +1,556 @@
+<title>Схема данных English Meet Bot</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --surface: #121823;
+    --surface-2: #182230;
+    --border: #263244;
+    --border-strong: #35455c;
+    --text: #e6edf3;
+    --text-dim: #8b98a8;
+    --text-faint: #5d6a7a;
+    --accent: #3ec6b8;
+    --accent-dim: #2a8f86;
+    --amber: #e8a04c;
+    --blue: #5b9bd5;
+    --pk: #e8a04c;
+    --fk: #5b9bd5;
+    --trigger: #3ec6b8;
+    --grid: rgba(62, 198, 184, 0.07);
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0f14;
+      --surface: #121823;
+      --surface-2: #182230;
+      --border: #263244;
+      --border-strong: #35455c;
+      --text: #e6edf3;
+      --text-dim: #8b98a8;
+      --text-faint: #5d6a7a;
+      --grid: rgba(62, 198, 184, 0.07);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0b0f14;
+    --surface: #121823;
+    --surface-2: #182230;
+    --border: #263244;
+    --border-strong: #35455c;
+    --text: #e6edf3;
+    --text-dim: #8b98a8;
+    --text-faint: #5d6a7a;
+    --grid: rgba(62, 198, 184, 0.07);
+  }
+
+  /* светлая тема — «чертёж на бумаге» */
+  :root[data-theme="light"] {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface-2: #eef2f6;
+    --border: #d8dfe7;
+    --border-strong: #b8c4d1;
+    --text: #16202b;
+    --text-dim: #4c5a68;
+    --text-faint: #8290a0;
+    --accent-dim: #1f7a72;
+    --grid: rgba(47, 137, 128, 0.06);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 88px 0 56px; position: relative; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--accent); }
+  h1 {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 64px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    margin: 22px 0 20px;
+    text-wrap: balance;
+  }
+  h1 .accent { color: var(--accent); }
+  .lede {
+    color: var(--text-dim);
+    font-size: 18px;
+    max-width: 640px;
+    text-wrap: pretty;
+  }
+  .stats {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    margin-top: 40px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 20px;
+    min-width: 130px;
+  }
+  .stat .num {
+    font-family: var(--mono);
+    font-size: 30px; font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .label {
+    font-family: var(--mono);
+    font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-faint);
+    margin-top: 2px;
+  }
+
+  /* ---------- секции ---------- */
+  section { padding: 64px 0; }
+  .sec-head { margin-bottom: 34px; }
+  .sec-head .kicker {
+    font-family: var(--mono); font-size: 12px;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent);
+  }
+  .sec-head h2 {
+    font-family: var(--mono); font-weight: 600;
+    font-size: clamp(24px, 3.4vw, 36px); letter-spacing: -0.02em;
+    margin-top: 8px; text-wrap: balance;
+  }
+  .sec-head p { color: var(--text-dim); margin-top: 10px; max-width: 660px; }
+
+  /* ---------- диаграмма ---------- */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 26px;
+    overflow-x: auto;
+  }
+  .diagram svg { display: block; min-width: 980px; width: 100%; height: auto; }
+  .diagram figcaption {
+    color: var(--text-faint); font-size: 13px; margin-top: 16px;
+    font-family: var(--mono);
+  }
+
+  /* ---------- таблицы ---------- */
+  .domain { margin-bottom: 46px; }
+  .domain > h3 {
+    font-family: var(--mono); font-weight: 600; font-size: 15px;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+  .domain > h3::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  table.schema {
+    width: 100%; border-collapse: collapse;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; font-size: 13px;
+  }
+  table.schema caption {
+    text-align: left; padding: 14px 16px 10px;
+    font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--text);
+    caption-side: top;
+  }
+  table.schema caption .tnote {
+    display: block; font-family: var(--sans); font-weight: 400;
+    font-size: 12px; color: var(--text-faint); margin-top: 3px;
+  }
+  table.schema th, table.schema td {
+    text-align: left; padding: 7px 16px; border-top: 1px solid var(--border);
+  }
+  table.schema thead th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-faint); font-weight: 500;
+    border-top: 1px solid var(--border);
+  }
+  table.schema td.col { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+  table.schema td.type { font-family: var(--mono); color: var(--text-dim); font-size: 12px; }
+  .badge {
+    display: inline-block; font-family: var(--mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.08em; padding: 1px 6px; border-radius: 4px;
+    margin-left: 6px; vertical-align: 1px;
+  }
+  .badge.pk { color: var(--pk); border: 1px solid var(--pk); }
+  .badge.fk { color: var(--fk); border: 1px solid var(--fk); }
+  .badge.unq { color: var(--accent); border: 1px solid var(--accent); }
+  .badge.den { color: var(--amber); border: 1px dashed var(--amber); }
+
+  /* ---------- триггеры ---------- */
+  .triggers { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .trigger {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--trigger); border-radius: 10px; padding: 22px;
+  }
+  .trigger h3 { font-family: var(--mono); font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  .trigger .flow {
+    font-family: var(--mono); font-size: 13px; color: var(--accent);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin: 12px 0;
+    overflow-x: auto; white-space: nowrap;
+  }
+  .trigger p { color: var(--text-dim); font-size: 14px; }
+
+  footer {
+    border-top: 1px solid var(--border); padding: 40px 0 64px;
+    color: var(--text-faint); font-family: var(--mono); font-size: 12px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">English Meet Bot · PostgreSQL 15</span>
+    <h1>Схема данных<br><span class="accent">разговорного бота</span></h1>
+    <p class="lede">Одиннадцать таблиц держат весь цикл: от знакомства участника до баллов за встречу. Ниже — карта связей, каждая таблица с колонками и два триггера, которые сами пересчитывают счётчики.</p>
+    <div class="stats">
+      <div class="stat"><div class="num">11</div><div class="label">таблиц</div></div>
+      <div class="stat"><div class="num">17</div><div class="label">внешних ключей</div></div>
+      <div class="stat"><div class="num">2</div><div class="label">триггера</div></div>
+      <div class="stat"><div class="num">6</div><div class="label">доменов</div></div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Цикл недели</div>
+      <h2>Как данные текут по таблицам</h2>
+      <p>Пять этапов — от онбординга до активности на встрече. Стрелки показывают, кто на кого ссылается внешним ключом. <code>config</code> стоит особняком: это хранилище настроек, а не участник потока.</p>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 1160 470" role="img" aria-label="Схема потока данных бота: онбординг, опрос, ответ, встреча, активность">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- этап 1: онбординг -->
+        <g>
+          <rect x="16" y="28" width="188" height="220" rx="10" fill="var(--surface-2)" stroke="var(--border)"/>
+          <text x="32" y="56" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--accent)">01 · ОНБОРДИНГ</text>
+          <rect x="32" y="74" width="156" height="46" rx="6" fill="var(--surface)" stroke="var(--border-strong)"/>
+          <text x="110" y="102" font-family="var(--mono)" font-size="15" font-weight="600" text-anchor="middle" fill="var(--text)">profiles</text>
+          <text x="110" y="128" font-family="var(--sans)" font-size="11" text-anchor="middle" fill="var(--text-faint)">участники</text>
+        </g>
+
+        <!-- этап 2: опрос -->
+        <g>
+          <rect x="248" y="28" width="196" height="220" rx="10" fill="var(--surface-2)" stroke="var(--border)"/>
+          <text x="264" y="56" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--accent)">02 · ОПРОС</text>
+          <rect x="264" y="74" width="164" height="42" rx="6" fill="var(--surface)" stroke="var(--border-strong)"/>
+          <text x="346" y="100" font-family="var(--mono)" font-size="14" font-weight="600" text-anchor="middle" fill="var(--text)">weekly_polls</text>
+          <rect x="264" y="124" width="164" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="346" y="150" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">poll_slots</text>
+          <rect x="264" y="174" width="164" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="346" y="200" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">poll_questions</text>
+        </g>
+
+        <!-- этап 3: ответ -->
+        <g>
+          <rect x="488" y="28" width="188" height="220" rx="10" fill="var(--surface-2)" stroke="var(--border)"/>
+          <text x="504" y="56" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--accent)">03 · ОТВЕТ</text>
+          <rect x="504" y="74" width="156" height="42" rx="6" fill="var(--surface)" stroke="var(--border-strong)"/>
+          <text x="582" y="100" font-family="var(--mono)" font-size="14" font-weight="600" text-anchor="middle" fill="var(--text)">poll_responses</text>
+          <rect x="504" y="124" width="156" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="582" y="150" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">poll_votes</text>
+        </g>
+
+        <!-- этап 4: встреча -->
+        <g>
+          <rect x="720" y="28" width="188" height="220" rx="10" fill="var(--surface-2)" stroke="var(--border)"/>
+          <text x="736" y="56" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--accent)">04 · ВСТРЕЧА</text>
+          <rect x="736" y="74" width="156" height="46" rx="6" fill="var(--surface)" stroke="var(--border-strong)"/>
+          <text x="814" y="102" font-family="var(--mono)" font-size="14" font-weight="600" text-anchor="middle" fill="var(--text)">meeting_instances</text>
+          <text x="814" y="128" font-family="var(--sans)" font-size="11" text-anchor="middle" fill="var(--text-faint)">выбранный слот</text>
+        </g>
+
+        <!-- этап 5: активность -->
+        <g>
+          <rect x="952" y="28" width="192" height="220" rx="10" fill="var(--surface-2)" stroke="var(--border)"/>
+          <text x="968" y="56" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--accent)">05 · АКТИВНОСТЬ</text>
+          <rect x="968" y="74" width="160" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="1048" y="100" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">attendance</text>
+          <rect x="968" y="124" width="160" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="1048" y="150" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">answers</text>
+          <rect x="968" y="174" width="160" height="42" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+          <text x="1048" y="200" font-family="var(--mono)" font-size="14" text-anchor="middle" fill="var(--text)">leaderboard_ledger</text>
+        </g>
+
+        <!-- стрелки между этапами -->
+        <g stroke="var(--text-faint)" stroke-width="1.4" fill="none">
+          <line x1="204" y1="138" x2="242" y2="138" marker-end="url(#arr)"/>
+          <line x1="444" y1="138" x2="482" y2="138" marker-end="url(#arr)"/>
+          <line x1="676" y1="138" x2="714" y2="138" marker-end="url(#arr)"/>
+          <line x1="908" y1="138" x2="946" y2="138" marker-end="url(#arr)"/>
+        </g>
+
+        <!-- config -->
+        <g>
+          <rect x="16" y="300" width="1128" height="120" rx="10" fill="none" stroke="var(--border)" stroke-dasharray="4 4"/>
+          <text x="32" y="332" font-family="var(--mono)" font-size="12" letter-spacing="2" fill="var(--text-faint)">СИСТЕМА · ВНЕ ПОТОКА</text>
+          <rect x="32" y="348" width="180" height="44" rx="6" fill="var(--surface)" stroke="var(--border-strong)"/>
+          <text x="122" y="375" font-family="var(--mono)" font-size="14" font-weight="600" text-anchor="middle" fill="var(--text)">config</text>
+          <text x="236" y="375" font-family="var(--sans)" font-size="12" fill="var(--text-faint)">настройки key → value (JSONB): слоты, буфер дедлайна, окно check-in, баллы</text>
+        </g>
+      </svg>
+      <figcaption>Поток недельного цикла: пять этапов слева направо, внизу пунктиром — системный блок, не участвующий в потоке.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Каталог</div>
+      <h2>Таблицы и их колонки</h2>
+      <p>Сгруппировано по доменам. Бейджи: <span class="badge pk">PK</span> первичный ключ, <span class="badge fk">FK</span> внешний ключ, <span class="badge unq">UNQ</span> уникальное ограничение, <span class="badge den">TRG</span> значение считает триггер.</p>
+    </div>
+
+    <div class="domain">
+      <h3>Участники</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>profiles <span class="tnote">Профиль участника: email, интересы, согласие, активность</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">user_email <span class="badge unq">UNQ</span></td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">user_name</td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">workspace_user_id <span class="badge unq">UNQ</span></td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">chat_space_id</td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">onboarding_completed</td><td class="type">BOOLEAN</td></tr>
+            <tr><td class="col">onboarding_answers</td><td class="type">JSONB</td></tr>
+            <tr><td class="col">english_level</td><td class="type">VARCHAR(50)</td></tr>
+            <tr><td class="col">interests</td><td class="type">TEXT[]</td></tr>
+            <tr><td class="col">preferred_days</td><td class="type">VARCHAR[]</td></tr>
+            <tr><td class="col">public_consent / anonymize_answers</td><td class="type">BOOLEAN</td></tr>
+            <tr><td class="col">is_active</td><td class="type">BOOLEAN</td></tr>
+            <tr><td class="col">created_at / updated_at</td><td class="type">TIMESTAMPTZ</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="domain">
+      <h3>Опрос</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>weekly_polls <span class="tnote">Один опрос = одна неделя</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">week_start <span class="badge unq">UNQ</span></td><td class="type">DATE</td></tr>
+            <tr><td class="col">voting_deadline</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">created_at / closed_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">reminder_interval_hours</td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">max_reminders</td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">status</td><td class="type">VARCHAR(50)</td></tr>
+          </tbody>
+        </table>
+
+        <table class="schema">
+          <caption>poll_slots <span class="tnote">Слот времени и места внутри опроса</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">poll_id <span class="badge fk">FK</span></td><td class="type">→ weekly_polls</td></tr>
+            <tr><td class="col">slot_start / slot_end</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">location</td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">priority</td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">votes_count <span class="badge den">TRG</span></td><td class="type">INTEGER</td></tr>
+          </tbody>
+        </table>
+
+        <table class="schema">
+          <caption>poll_questions <span class="tnote">LLM-вопрос для конкретного участника</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">poll_id <span class="badge fk">FK</span></td><td class="type">→ weekly_polls</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">question_text</td><td class="type">TEXT</td></tr>
+            <tr><td class="col">created_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">(poll_id, profile_id) <span class="badge unq">UNQ</span></td><td class="type">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="domain">
+      <h3>Ответы и голоса</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>poll_responses <span class="tnote">Статус ответа участника на опрос</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">poll_id <span class="badge fk">FK</span></td><td class="type">→ weekly_polls</td></tr>
+            <tr><td class="col">status</td><td class="type">pending / responded / skipped</td></tr>
+            <tr><td class="col">responded_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">reminder_count</td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">last_reminder_at / next_reminder_at</td><td class="type">TIMESTAMPTZ</td></tr>
+          </tbody>
+        </table>
+
+        <table class="schema">
+          <caption>poll_votes <span class="tnote">Голос участника за слот; один голос на пару (участник, слот)</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">poll_response_id <span class="badge fk">FK</span></td><td class="type">→ poll_responses</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">poll_slot_id <span class="badge fk">FK</span></td><td class="type">→ poll_slots</td></tr>
+            <tr><td class="col">voted_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">(profile_id, poll_slot_id) <span class="badge unq">UNQ</span></td><td class="type">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="domain">
+      <h3>Встреча</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>meeting_instances <span class="tnote">Экземпляр встречи на основе выбранного слота</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">poll_id <span class="badge fk">FK</span></td><td class="type">→ weekly_polls</td></tr>
+            <tr><td class="col">selected_slot_id <span class="badge fk">FK</span></td><td class="type">→ poll_slots</td></tr>
+            <tr><td class="col">scheduled_start / scheduled_end</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">location</td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">status</td><td class="type">scheduled / completed / cancelled</td></tr>
+            <tr><td class="col">activity_type / activity_data</td><td class="type">VARCHAR / JSONB</td></tr>
+            <tr><td class="col">participants_count <span class="badge den">TRG</span></td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">completed_at</td><td class="type">TIMESTAMPTZ</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="domain">
+      <h3>Активность</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>answers <span class="tnote">Ответы на вопросы — история, не перезапись</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">meeting_instance_id <span class="badge fk">FK</span></td><td class="type">→ meeting_instances (nullable)</td></tr>
+            <tr><td class="col">question_text</td><td class="type">TEXT</td></tr>
+            <tr><td class="col">answer_text / answer_choice</td><td class="type">TEXT / VARCHAR</td></tr>
+            <tr><td class="col">is_public</td><td class="type">BOOLEAN</td></tr>
+            <tr><td class="col">answered_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">week_start</td><td class="type">DATE</td></tr>
+            <tr><td class="col">question_rotation_id</td><td class="type">INTEGER</td></tr>
+          </tbody>
+        </table>
+
+        <table class="schema">
+          <caption>attendance <span class="tnote">Посещаемость: self-check-in или ручная отметка</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">meeting_instance_id <span class="badge fk">FK</span></td><td class="type">→ meeting_instances</td></tr>
+            <tr><td class="col">source</td><td class="type">self_checkin / manual</td></tr>
+            <tr><td class="col">status</td><td class="type">pending / present / absent</td></tr>
+            <tr><td class="col">checkin_attempted_at</td><td class="type">TIMESTAMPTZ</td></tr>
+            <tr><td class="col">is_within_window</td><td class="type">BOOLEAN</td></tr>
+            <tr><td class="col">checked_in_by <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">notes</td><td class="type">TEXT</td></tr>
+          </tbody>
+        </table>
+
+        <table class="schema">
+          <caption>leaderboard_ledger <span class="tnote">Идемпотентный журнал начислений баллов</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">id <span class="badge pk">PK</span></td><td class="type">BIGINT</td></tr>
+            <tr><td class="col">profile_id <span class="badge fk">FK</span></td><td class="type">→ profiles</td></tr>
+            <tr><td class="col">meeting_instance_id <span class="badge fk">FK</span></td><td class="type">→ meeting_instances (nullable)</td></tr>
+            <tr><td class="col">event_type</td><td class="type">attendance / answer / streak / mvp / bonus</td></tr>
+            <tr><td class="col">points</td><td class="type">INTEGER</td></tr>
+            <tr><td class="col">reason</td><td class="type">TEXT</td></tr>
+            <tr><td class="col">metadata</td><td class="type">JSONB</td></tr>
+            <tr><td class="col">event_date</td><td class="type">TIMESTAMPTZ</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="domain">
+      <h3>Система</h3>
+      <div class="tables">
+        <table class="schema">
+          <caption>config <span class="tnote">Настройки key → value, не участвует в потоке</span></caption>
+          <thead><tr><th>Колонка</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td class="col">key <span class="badge pk">PK</span></td><td class="type">VARCHAR(255)</td></tr>
+            <tr><td class="col">value</td><td class="type">JSONB</td></tr>
+            <tr><td class="col">description</td><td class="type">TEXT</td></tr>
+            <tr><td class="col">updated_at</td><td class="type">TIMESTAMPTZ</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">БД сама считает</div>
+      <h2>Два триггера</h2>
+      <p>Денормализованные счётчики не трогает код — их поддерживает PostgreSQL при каждой вставке или удалении строки. Никакой рассинхронизации между «сырыми» строками и агрегатами.</p>
+    </div>
+    <div class="triggers">
+      <div class="trigger">
+        <h3>update_poll_slot_votes_count</h3>
+        <p>Держит актуальным число голосов у каждого слота — чтобы выбор победителя был одним <code>ORDER BY votes_count</code>, без подсчёта <code>poll_votes</code> на каждый запрос.</p>
+        <div class="flow">poll_votes — INSERT / DELETE → poll_slots.votes_count = COUNT(*)</div>
+      </div>
+      <div class="trigger">
+        <h3>update_meeting_participants_count</h3>
+        <p>Считает участников встречи по посещаемости: только строки со статусом <code>present</code> попадают в счётчик.</p>
+        <div class="flow">attendance — INSERT / UPDATE OF status → meeting_instances.participants_count</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">English Meet Bot · схема данных · PostgreSQL 15, SQLAlchemy 2 async · сгенерировано по <code>app/models.py</code> и <code>alembic/versions/</code></div>
+</footer>
