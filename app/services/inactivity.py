@@ -37,3 +37,50 @@ def should_remind(profile, now: datetime, interval_days: int, max_reminders: int
     if profile.last_reminder_at is None:
         return True
     return (now - _as_utc(profile.last_reminder_at)).days >= interval_days
+
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.messaging import send_message
+from app.models import Profile
+from app.schemas import MessagePayload
+
+DEFAULT_DAYS = 7
+DEFAULT_INTERVAL_DAYS = 3
+DEFAULT_MAX_REMINDERS = 3
+
+
+async def remind_inactive(db: AsyncSession) -> int:
+    """Найти неактивных активных участников и отправить им напоминание в DM."""
+    from app.services.weekly_poll import get_or_create_config
+
+    days = int((await get_or_create_config(db, "inactivity_reminder_days", DEFAULT_DAYS)).value or DEFAULT_DAYS)
+    interval = int((await get_or_create_config(db, "inactivity_reminder_interval_days", DEFAULT_INTERVAL_DAYS)).value or DEFAULT_INTERVAL_DAYS)
+    max_reminders = int((await get_or_create_config(db, "inactivity_max_reminders", DEFAULT_MAX_REMINDERS)).value or DEFAULT_MAX_REMINDERS)
+
+    now = datetime.now(timezone.utc)
+    profiles = (
+        await db.execute(
+            select(Profile).where(
+                Profile.is_active.is_(True),
+                Profile.chat_space_id.isnot(None),
+            )
+        )
+    ).scalars().all()
+
+    sent = 0
+    for p in profiles:
+        if not is_inactive(p, now, days):
+            continue
+        if not should_remind(p, now, interval, max_reminders):
+            continue
+        send_message(p.workspace_user_id, MessagePayload(text=REMINDER_TEXT))
+        p.reminder_count += 1
+        p.last_reminder_at = now
+        sent += 1
+
+    if sent:
+        await db.commit()
+    logger.info("inactivity_reminders_sent sent=%s", sent)
+    return sent
