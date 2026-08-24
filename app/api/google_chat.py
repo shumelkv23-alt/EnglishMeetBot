@@ -685,6 +685,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                             display_name=user.get("displayName"),
                             chat_space_id=_dm_space_name(space),
                         )
+                        from datetime import datetime, timezone
+
+                        from app.services.inactivity import touch_activity
+
+                        touch_activity(profile, datetime.now(timezone.utc))
                         await save_answer(db, profile, ONBOARDING_QUESTION, raw_text)
                 except Exception:
                     # Сбой БД не должен ломать ответ бота
@@ -741,6 +746,27 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if _is_onboarding_command(raw_text):
             space = event.get("space", {})
             return JSONResponse(content=_onboarding_response_payload(user_name, space))
+        user = event.get("user", {})
+        workspace_user_id = user.get("name", "")
+        if workspace_user_id:
+            try:
+                from datetime import datetime, timezone
+
+                from app.services.inactivity import touch_activity
+
+                space = event.get("space", {})
+                async with AsyncSessionLocal() as db:
+                    profile = await get_or_create_profile(
+                        db,
+                        workspace_user_id=workspace_user_id,
+                        email=user.get("email"),
+                        display_name=user.get("displayName"),
+                        chat_space_id=_dm_space_name(space),
+                    )
+                    touch_activity(profile, datetime.now(timezone.utc))
+                    await db.commit()
+            except Exception:
+                logger.exception("db_write_failed")
         return JSONResponse(content={"text": _reply_text(user_name, raw_text)})
 
     if event_type == "CARD_CLICKED":

@@ -97,6 +97,11 @@ async def submit_weekly_question(
             answer_text=bank_answer[0],
             week_start=week_start,
         ))
+    from datetime import datetime, timezone
+
+    from app.services.inactivity import touch_activity
+
+    touch_activity(profile, datetime.now(timezone.utc))
     await db.commit()
     logger.info("weekly_question_answered profile=%s", profile.id)
     return {"ok": True, "reason": "saved"}

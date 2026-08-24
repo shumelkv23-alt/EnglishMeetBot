@@ -61,3 +61,87 @@ async def test_remind_stops_at_limit(db, monkeypatch):
     await remind_inactive(db)
 
     assert "users/e2e_inact_limit" not in sent  # лимит 3 исчерпан
+
+
+async def test_submit_poll_touches_activity(db, today_poll):
+    from app.services.weekly_poll import submit_poll
+
+    p = await get_or_create_profile(db, "users/e2e_touch_poll")
+    p.reminder_count = 5
+    p.last_activity_at = None
+    await db.commit()
+
+    await submit_poll(db, p, {"time": {"stringInputs": {"value": ["15:00"]}}})
+
+    await db.refresh(p)
+    assert p.last_activity_at is not None
+    assert p.reminder_count == 0
+
+
+async def test_submit_weekly_question_touches_activity(db):
+    from app.services.weekly_questions import submit_weekly_question
+
+    p = await get_or_create_profile(db, "users/e2e_touch_wq")
+    p.reminder_count = 2
+    p.last_activity_at = None
+    await db.commit()
+
+    await submit_weekly_question(
+        db, p, {"q_llm": {"stringInputs": {"value": ["ответ"]}}}, "личный вопрос", "общий вопрос",
+    )
+
+    await db.refresh(p)
+    assert p.last_activity_at is not None
+    assert p.reminder_count == 0
+
+
+async def test_submit_checkin_touches_activity(db, today_poll):
+    from sqlalchemy import select
+
+    from app.models import MeetingInstance, PollSlot
+    from app.services.checkin import submit_checkin
+
+    p = await get_or_create_profile(db, "users/e2e_touch_checkin")
+    p.reminder_count = 4
+    p.last_activity_at = None
+    await db.commit()
+
+    slot = (
+        await db.execute(select(PollSlot).where(PollSlot.poll_id == today_poll.id).limit(1))
+    ).scalar_one()
+    meeting = MeetingInstance(
+        poll_id=today_poll.id,
+        selected_slot_id=slot.id,
+        scheduled_start=datetime.now(timezone.utc),
+        scheduled_end=datetime.now(timezone.utc) + timedelta(hours=1),
+        location="Онлайн (Meet)",
+        status="scheduled",
+    )
+    db.add(meeting)
+    await db.flush()
+
+    await submit_checkin(db, p, meeting.id)
+
+    await db.refresh(p)
+    assert p.last_activity_at is not None
+    assert p.reminder_count == 0
+
+
+async def test_message_touches_activity(client, db):
+    from sqlalchemy import select
+
+    from app.models import Profile
+
+    event = {
+        "type": "MESSAGE",
+        "user": {"name": "users/e2e_touch_msg", "displayName": "E2E", "email": "e2e@example.com"},
+        "message": {"text": "привет"},
+        "space": {"name": "spaces/e2e_dm", "type": "DM"},
+    }
+    resp = await client.post("/webhooks/google-chat", json=event)
+    assert resp.status_code == 200
+
+    profile = (
+        await db.execute(select(Profile).where(Profile.workspace_user_id == "users/e2e_touch_msg"))
+    ).scalar_one()
+    assert profile.last_activity_at is not None
