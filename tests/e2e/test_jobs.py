@@ -154,3 +154,27 @@ async def test_poll_counts_reflects_votes(db, today_poll):
     assert counts["15:00"] == 1
     assert counts["16:00"] == 0
     assert counts["not_available"] == 1
+
+
+async def test_inactivity_reminder_job_calls_remind_inactive(db, monkeypatch):
+    called: list[int] = []
+    async def fake_remind(db):
+        called.append(1)
+        return 0
+    monkeypatch.setattr("app.services.inactivity.remind_inactive", fake_remind)
+    from app.scheduler import _run_inactivity_reminder
+
+    await _run_inactivity_reminder()
+
+    assert called == [1]
+
+
+async def test_inactivity_job_registered(db):
+    from app import scheduler as sched_mod
+    from app.scheduler import init_scheduler, shutdown_scheduler
+
+    await init_scheduler()
+    try:
+        assert sched_mod.scheduler.get_job("inactivity-reminder") is not None
+    finally:
+        shutdown_scheduler()
