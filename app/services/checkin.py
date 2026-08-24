@@ -1,4 +1,4 @@
-"""Self-check-in окно ±N минут вокруг встречи (REQ-6.2, REQ-9.6)."""
+"""Self-check-in: отметка «Я на встрече» в окне встречи (start..end+15)."""
 from datetime import datetime, timedelta
 
 
