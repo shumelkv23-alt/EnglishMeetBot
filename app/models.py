@@ -48,6 +48,9 @@ class Profile(Base):
     onboarding_completed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    onboarding_invite_sent: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     onboarding_answers: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     english_level: Mapped[str | None] = mapped_column(String(50))
     interests: Mapped[list[str] | None] = mapped_column(ARRAY(Text))

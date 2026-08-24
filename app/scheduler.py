@@ -87,6 +87,27 @@ async def _run_weekly_questions() -> None:
         await send_weekly_questions(db)
 
 
+async def _poll_new_members() -> None:
+    """Джоб поллинга: пригласить новых участников группы в онбординг."""
+    from app.api.google_chat import _onboarding_card
+    from app.messaging import send_message
+    from app.schemas import MessagePayload
+    from app.services.chat_sender import send_text
+    from app.services.space_onboarding import check_new_members
+    from app.services.weekly_poll import get_or_create_config
+
+    async with AsyncSessionLocal() as db:
+        space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+        if not space_id:
+            return
+        plan = await check_new_members(db, space_id)
+        for ws in plan["dm"]:
+            send_message(ws, MessagePayload(text="Привет! Заполни короткую анкету 🙌", card=_onboarding_card("друг")))
+        if plan["mention"]:
+            mentions = " ".join(f"<{m}>" for m in plan["mention"])
+            send_text(space_id, f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋")
+
+
 async def init_scheduler() -> None:
     """Создать и запустить шедулер; время джобов — из config."""
     global scheduler
@@ -130,6 +151,13 @@ async def init_scheduler() -> None:
         id="weekly-questions",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _poll_new_members,
+        "interval",
+        minutes=10,
+        id="onboarding-poll",
+        replace_existing=True,
     )
     scheduler.start()
     logger.info("scheduler_started")

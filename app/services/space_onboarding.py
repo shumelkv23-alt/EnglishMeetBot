@@ -56,3 +56,35 @@ async def onboard_space_members(db: AsyncSession, space_name: str) -> dict:
         else:
             by_ws[p.workspace_user_id] = "mention"
     return plan_onboarding(by_ws, member_ids)
+
+
+async def check_new_members(db: AsyncSession, space_name: str) -> dict:
+    """Найти новых участников и спланировать приглашение в онбординг.
+
+    В отличие от onboard_space_members, помечает onboarding_invite_sent,
+    чтобы повторный поллинг не тегал одних и тех же людей. Возвращает
+    {'dm': [...], 'mention': [...]} для НОВЫХ участников.
+    """
+    from app.services.chat_sender import list_space_members
+    from app.services.onboarding import get_or_create_profile
+
+    memberships = list_space_members(space_name)
+    member_ids = [
+        m["member"]["name"]
+        for m in memberships
+        if m.get("member", {}).get("type") == "HUMAN"
+        and "users/" in m["member"].get("name", "")
+    ]
+
+    dm, mention = [], []
+    for ws in member_ids:
+        profile = await get_or_create_profile(db, workspace_user_id=ws)
+        if profile.onboarding_completed or profile.onboarding_invite_sent:
+            continue
+        if profile.chat_space_id:
+            dm.append(ws)
+        else:
+            mention.append(ws)
+        profile.onboarding_invite_sent = True
+    await db.commit()
+    return {"dm": dm, "mention": mention}

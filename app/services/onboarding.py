@@ -81,5 +81,6 @@ async def mark_onboarded(db: AsyncSession, profile: Profile) -> None:
     """Отметить онбординг пройденным."""
     if not profile.onboarding_completed:
         profile.onboarding_completed = True
+        profile.onboarding_invite_sent = False
         await db.commit()
         logger.info("profile_onboarded workspace_user_id=%s", profile.workspace_user_id)
