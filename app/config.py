@@ -5,7 +5,8 @@ from functools import lru_cache
 class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
-    
+    app_timezone: str = "Europe/Minsk"  # таймзона расписания и дедлайнов ежедневного опроса
+
     # DB settings
     postgres_user: str
     postgres_password: str

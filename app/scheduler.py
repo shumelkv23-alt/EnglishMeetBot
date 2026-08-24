@@ -26,8 +26,7 @@ async def _run_daily_poll() -> None:
     )
 
     async with AsyncSessionLocal() as db:
-        now = datetime.now(timezone.utc)
-        poll = await ensure_daily_poll(db, now)
+        poll = await ensure_daily_poll(db)
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
         if poll is not None and space_id:
             slots = ["15:00", "16:00", "17:00"]
@@ -44,10 +43,10 @@ async def _run_daily_poll() -> None:
 
 async def _finalize_daily_poll() -> None:
     """Джоб 14:05 — подвести итог опроса дня и оповестить группу."""
-    from app.services.weekly_poll import active_daily_poll, finalize_daily_poll
+    from app.services.weekly_poll import active_daily_poll, finalize_daily_poll, today
 
     async with AsyncSessionLocal() as db:
-        poll = await active_daily_poll(db, datetime.now(timezone.utc).date())
+        poll = await active_daily_poll(db, today())
         if poll is None:
             logger.info("daily_finalize_job no_active_poll")
             return
@@ -73,7 +72,7 @@ def init_scheduler() -> None:
     global scheduler
     if scheduler is not None:
         return
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler = AsyncIOScheduler(timezone=get_settings().app_timezone)
     scheduler.add_job(
         _run_daily_poll,
         "cron",

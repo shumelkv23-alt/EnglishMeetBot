@@ -13,8 +13,7 @@ from app.services.weekly_poll import build_daily_poll_card, ensure_daily_poll, g
 
 async def main() -> None:
     async with AsyncSessionLocal() as db:
-        now = datetime.now(timezone.utc)
-        poll = await ensure_daily_poll(db, now)
+        poll = await ensure_daily_poll(db)
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
         print("poll:", None if poll is None else (poll.id, poll.status))
         if poll is not None and space_id:

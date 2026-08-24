@@ -6,7 +6,9 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
+from app.config import get_settings
 from app.services.form_parsing import parse_form_inputs
 
 logger = logging.getLogger(__name__)
@@ -123,8 +125,8 @@ async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Co
 
 
 def today() -> date:
-    """Текущий день в UTC — дата ежедневного опроса."""
-    return datetime.now(timezone.utc).date()
+    """Текущий день в таймзоне приложения — дата ежедневного опроса."""
+    return datetime.now(ZoneInfo(get_settings().app_timezone)).date()
 
 
 def slot_datetime(time_str: str) -> datetime:
@@ -145,13 +147,13 @@ async def active_daily_poll(db: AsyncSession, day: date) -> DailyPoll | None:
     ).scalar_one_or_none()
 
 
-async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None:
+async def ensure_daily_poll(db: AsyncSession) -> DailyPoll | None:
     """Активный опрос дня; если нет — создать опрос и слоты из config['daily_slots'].
 
     Слоты создаются с slot_start = slot_datetime(t) (carrier-дата 2000-01-01) —
     так submit_poll матчит голос по slot_start == slot_datetime(choice).
     """
-    day = now.date()
+    day = today()
     poll = await active_daily_poll(db, day)
     if poll is not None:
         return poll
@@ -166,7 +168,7 @@ async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None
 
     poll = DailyPoll(
         poll_date=day,
-        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=timezone.utc),
+        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=ZoneInfo(get_settings().app_timezone)),
         status="active",
     )
     db.add(poll)

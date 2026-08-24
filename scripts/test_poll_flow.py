@@ -29,7 +29,7 @@ async def main() -> None:
             await db.execute(delete(DailyPoll).where(DailyPoll.id == old.id))
             await db.commit()
 
-        poll = await ensure_daily_poll(db, datetime.now(timezone.utc))
+        poll = await ensure_daily_poll(db)
         # страховка: дедлайн должен быть в будущем (если скрипт гоняют после 14:00 UTC)
         if poll.voting_deadline < datetime.now(timezone.utc):
             poll.voting_deadline = datetime.now(timezone.utc) + timedelta(hours=2)

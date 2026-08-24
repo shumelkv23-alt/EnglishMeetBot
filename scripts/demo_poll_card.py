@@ -30,7 +30,7 @@ async def main() -> None:
             await db.execute(delete(DailyPoll).where(DailyPoll.id == old.id))
             await db.commit()
 
-        poll = await ensure_daily_poll(db, datetime.now(timezone.utc))
+        poll = await ensure_daily_poll(db)
         slots = [
             s.slot_start.strftime("%H:%M") for s in (
                 await db.execute(select(PollSlot).where(PollSlot.poll_id == poll.id).order_by(PollSlot.slot_start))
