@@ -73,7 +73,7 @@ async def test_send_weekly_questions_skips_answered(db, monkeypatch):
     monkeypatch.setattr("app.services.weekly_questions.send_message", lambda uid, payload: sent.append(uid))
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests: "Вопрос",
+        lambda interests, avoid=None: "Вопрос",
     )
     # активный профиль с DM
     await get_or_create_profile(db, "users/e2e_wq_send", chat_space_id="spaces/e2e_wq")
@@ -93,7 +93,7 @@ async def test_send_weekly_questions_skips_after_answer(db, monkeypatch):
     monkeypatch.setattr("app.services.weekly_questions.send_message", lambda uid, payload: sent.append(uid))
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests: "Вопрос",
+        lambda interests, avoid=None: "Вопрос",
     )
     p = await get_or_create_profile(db, "users/e2e_wq_answered", chat_space_id="spaces/e2e_wq")
     await submit_weekly_question(db, p, FORM, "Вопрос", "Вопрос")

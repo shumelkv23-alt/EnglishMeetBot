@@ -92,8 +92,9 @@ async def test_checkin_within_window_marks_present(db, today_poll):
     p = await get_or_create_profile(db, "users/e2e_checkin")
     meeting = await _make_meeting(db, today_poll, datetime.now(timezone.utc))
 
-    result = await submit_checkin(db, p, meeting.id, window_min=15)
+    result = await submit_checkin(db, p, meeting.id, after_min=15)
     assert result["within"] is True
+    assert result["count"] == 1
 
     att = (
         await db.execute(
@@ -108,9 +109,9 @@ async def test_checkin_within_window_marks_present(db, today_poll):
 
 async def test_checkin_outside_window_stays_pending(db, today_poll):
     p = await get_or_create_profile(db, "users/e2e_checkin_out")
-    meeting = await _make_meeting(db, today_poll, datetime.now(timezone.utc) - timedelta(hours=1))
+    meeting = await _make_meeting(db, today_poll, datetime.now(timezone.utc) - timedelta(hours=3))
 
-    result = await submit_checkin(db, p, meeting.id, window_min=15)
+    result = await submit_checkin(db, p, meeting.id, after_min=15)
     assert result["within"] is False
 
     att = (

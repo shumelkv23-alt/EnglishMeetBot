@@ -93,8 +93,8 @@ async def handle_time_finalized(
             replace_existing=True,
             args=[str(instance_id)],
         )
-        window_min = int(await _config_value(db, "checkin_window_min", 15) or 15)
-        open_at, close_at = checkin_window(scheduled_start, window_min)
+        duration = int(await _config_value(db, "meeting_duration_minutes", 60) or 60)
+        open_at, close_at = checkin_window(scheduled_start, scheduled_start + timedelta(minutes=duration))
         sch.add_job(
             _open_checkin, "date", run_date=open_at,
             id=checkin_job_ids(str(instance_id))["open"], replace_existing=True,

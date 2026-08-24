@@ -69,26 +69,27 @@ def _dm_space_name(space: dict) -> str | None:
     return None
 
 
-async def _handle_checkin_present(chat_data: dict, common: dict) -> dict:
-    """Кнопка «Я на встрече»: запись self-check-in, если в окне (REQ-9.6)."""
+async def _handle_checkin_present(chat_data: dict, common: dict) -> JSONResponse:
+    """Кнопка «Я на встрече»: self-check-in в окне → обновить карточку счётчиком."""
     params = common.get("parameters") or {}
     instance_id = str(params.get("instance", ""))
     user = chat_data.get("user", {})
     workspace_user_id = user.get("name", "")
-    result = {"ok": False, "within": False}
+    message_name = (chat_data.get("buttonClickedPayload", {}).get("message") or {}).get("name")
+    result = {"ok": False, "within": False, "count": 0}
     if workspace_user_id and instance_id.isdigit():
         try:
-            from app.services.checkin import submit_checkin
+            from app.services.checkin import build_checkin_card, submit_checkin
 
             async with AsyncSessionLocal() as db:
                 profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
                 result = await submit_checkin(db, profile, int(instance_id))
         except Exception:
             logger.exception("checkin_submit_failed")
-    text = "Ты на встрече! Баллы зачислены 🎉" if result.get("within") else (
-        "Кнопка вне окна встречи — отметка не засчитана ⏳"
-    )
-    return {"text": text}
+    if result.get("within") and message_name:
+        card = build_checkin_card(instance_id, settings.chat_app_audience, result.get("count", 0))
+        return _addon_update_message(message_name, card)
+    return JSONResponse(content={})
 
 
 async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
@@ -653,7 +654,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 message_name = (chat_data.get("buttonClickedPayload", {}).get("message") or {}).get("name")
                 return await _submit_daily_poll(chat_data, common, message_name=message_name)
             if method == "checkin_present":
-                return _addon_response(await _handle_checkin_present(chat_data, common))
+                return await _handle_checkin_present(chat_data, common)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 
@@ -793,7 +794,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 {"user": user, "space": {"name": space_name}},
                 {"parameters": {"instance": instance_id}},
             )
-            return _addon_response(response_msg)
+            return response_msg
         logger.info("event=CARD_CLICKED format=classic function=%s method=%s", function_name, method)
         return JSONResponse(content={})
 

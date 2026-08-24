@@ -2,12 +2,9 @@
 from datetime import datetime, timedelta
 
 
-def checkin_window(scheduled_start: datetime, window_min: int) -> tuple[datetime, datetime]:
-    """Открытие/закрытие окна «Я на встрече ✅»."""
-    return (
-        scheduled_start - timedelta(minutes=window_min),
-        scheduled_start + timedelta(minutes=window_min),
-    )
+def checkin_window(scheduled_start: datetime, scheduled_end: datetime, after_min: int = 15) -> tuple[datetime, datetime]:
+    """Окно check-in: от начала встречи до конца + after_min минут."""
+    return (scheduled_start, scheduled_end + timedelta(minutes=after_min))
 
 
 def is_within_window(now: datetime, open_at: datetime, close_at: datetime) -> bool:
@@ -19,8 +16,8 @@ def job_ids(instance_id: str) -> dict:
     return {"open": f"checkin_open_{instance_id}", "close": f"checkin_close_{instance_id}"}
 
 
-def build_checkin_card(instance_id: str, action_url: str = "") -> dict:
-    """Карточка с кнопкой «Я на встрече ✅» (для отправки при открытии окна).
+def build_checkin_card(instance_id: str, action_url: str = "", count: int = 0) -> dict:
+    """Карточка с кнопкой «Я на встрече ✅» и счётчиком отметившихся.
 
     action_url — URL вебхука (chat_app_audience): в Chat Card API action.function
     это URL, а не имя функции (метод приходит через parameters).
@@ -32,6 +29,7 @@ def build_checkin_card(instance_id: str, action_url: str = "") -> dict:
                 "card": {
                     "header": {"title": "Встреча началась? 🎉", "subtitle": "Отметься, чтобы получить баллы"},
                     "sections": [
+                        {"widgets": [{"textParagraph": {"text": f"Отметились: {count}"}}]},
                         {
                             "widgets": [
                                 {
@@ -65,7 +63,7 @@ def build_checkin_card(instance_id: str, action_url: str = "") -> dict:
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Attendance, MeetingInstance as MeetingORM, Profile
@@ -73,15 +71,15 @@ from app.models import Attendance, MeetingInstance as MeetingORM, Profile
 logger = logging.getLogger(__name__)
 
 
-async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, window_min: int = 15) -> dict:
-    """Записать self-check-in, только если сейчас в окне встречи (REQ-9.6)."""
+async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, after_min: int = 15) -> dict:
+    """Записать self-check-in, только если сейчас в окне встречи (start..end+after_min)."""
     meeting = (
         await db.execute(select(MeetingORM).where(MeetingORM.id == instance_id, MeetingORM.status == "scheduled"))
     ).scalar_one_or_none()
     if meeting is None:
-        return {"ok": False, "reason": "no_meeting"}
+        return {"ok": False, "reason": "no_meeting", "within": False, "count": 0}
 
-    open_at, close_at = checkin_window(meeting.scheduled_start, window_min)
+    open_at, close_at = checkin_window(meeting.scheduled_start, meeting.scheduled_end, after_min)
     now = datetime.now(timezone.utc)
     within = is_within_window(now, open_at, close_at)
 
@@ -110,5 +108,13 @@ async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, w
             attendance.status = "present"
 
     await db.commit()
+    count = (
+        await db.execute(
+            select(func.count()).select_from(Attendance).where(
+                Attendance.meeting_instance_id == instance_id,
+                Attendance.status == "present",
+            )
+        )
+    ).scalar_one()
     logger.info("checkin_submitted profile=%s instance=%s within=%s", profile.id, instance_id, within)
-    return {"ok": True, "within": within}
+    return {"ok": True, "within": within, "count": count}

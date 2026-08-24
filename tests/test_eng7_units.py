@@ -25,16 +25,24 @@ def test_reminder_at():
 
 def test_checkin_window():
     start = datetime(2026, 8, 26, 19, 0, tzinfo=timezone.utc)
-    open_at, close_at = checkin_window(start, 15)
-    assert open_at == start - timedelta(minutes=15)
-    assert close_at == start + timedelta(minutes=15)
+    end = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+    open_at, close_at = checkin_window(start, end)
+    assert open_at == start
+    assert close_at == end + timedelta(minutes=15)
+
+
+def test_build_checkin_card_has_count():
+    card = build_checkin_card("7", action_url="https://example.com/hook", count=3)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    assert sections[0]["widgets"][0]["textParagraph"]["text"] == "Отметились: 3"
 
 
 def test_is_within_window():
     start = datetime(2026, 8, 26, 19, 0, tzinfo=timezone.utc)
-    open_at, close_at = checkin_window(start, 15)
+    end = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+    open_at, close_at = checkin_window(start, end)
     assert is_within_window(start, open_at, close_at) is True
-    assert is_within_window(start + timedelta(minutes=16), open_at, close_at) is False
+    assert is_within_window(end + timedelta(minutes=16), open_at, close_at) is False
 
 
 def test_job_ids():
@@ -44,7 +52,7 @@ def test_job_ids():
 
 def test_build_checkin_card_button_function_is_url():
     card = build_checkin_card("7", action_url="https://example.com/hook")
-    button = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"][0]
+    button = card["cardsV2"][0]["card"]["sections"][1]["widgets"][0]["buttonList"]["buttons"][0]
     function = button["onClick"]["action"]["function"]
     assert function == "https://example.com/hook"
     assert function != "checkin_submit"

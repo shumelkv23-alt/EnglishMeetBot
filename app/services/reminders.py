@@ -40,8 +40,6 @@ async def restore_reminders_on_startup() -> int:
         )).scalars().all()
         cfg_lead = (await db.execute(select(Config).where(Config.key == "meet_reminder_hours"))).scalar_one_or_none()
         lead_hours = int(cfg_lead.value or 1) if cfg_lead is not None else 1
-        cfg_window = (await db.execute(select(Config).where(Config.key == "checkin_window_min"))).scalar_one_or_none()
-        window_min = int(cfg_window.value or 15) if cfg_window is not None else 15
         cfg_space = (await db.execute(select(Config).where(Config.key == "space_id"))).scalar_one_or_none()
         space_id = cfg_space.value or "" if cfg_space is not None else ""
 
@@ -52,7 +50,7 @@ async def restore_reminders_on_startup() -> int:
     restored = 0
     for m in meetings:
         remind = reminder_at(m.scheduled_start, lead_hours)
-        open_at, close_at = checkin_window(m.scheduled_start, window_min)
+        open_at, close_at = checkin_window(m.scheduled_start, m.scheduled_end)
         if remind > now:
             scheduler.add_job(_send_reminder, "date", run_date=remind, id=reminder_job_id(str(m.id)), replace_existing=True, args=[str(m.id)])
             restored += 1
