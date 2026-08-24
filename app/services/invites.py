@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.messaging import send_message
+from app.services.chat_sender import send_text
 from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
 from app.schemas import MessagePayload
 from app.services.checkin import checkin_window, build_checkin_card, job_ids as checkin_job_ids
@@ -71,31 +72,16 @@ async def handle_time_finalized(
     db: AsyncSession, instance_id: int, day: str, time: str,
     activity: Activity | None = None, scheduled_start: datetime | None = None,
 ) -> dict:
-    """При TIME_FINALIZED: личные приглашения ответившим на опрос, пост в Space,
-    джобы напоминания и check-in окна. REQ-5.1, REQ-5.2, REQ-9.2–9.3."""
-    poll_id = (await db.execute(
-        select(MeetingORM.poll_id).where(MeetingORM.id == instance_id)
-    )).scalar_one_or_none()
-    responders = []
-    if poll_id is not None:
-        responders = (await db.execute(
-            select(Profile).join(PollResponse, PollResponse.profile_id == Profile.id).where(
-                PollResponse.poll_id == poll_id,
-                PollResponse.status == "responded",
-                Profile.workspace_user_id.isnot(None),
-            )
-        )).scalars().all()
+    """При TIME_FINALIZED: пост в Space (время встречи) + джобы напоминания и check-in окна.
 
+    Личные приглашения в DM не шлём — только уведомление в общую группу.
+    """
     theme_text = _theme_from_activity(activity)
     text = build_invite_text(day, time, theme_text)
-    sent = 0
-    for profile in responders:
-        send_message(profile.workspace_user_id, MessagePayload(text=text))
-        sent += 1
 
     space_id = await _config_value(db, "space_id", "")
     if space_id:
-        send_message(space_id, MessagePayload(text=f"🗓️ {text}"))
+        send_text(space_id, f"🗓️ {text}")
 
     sch = _scheduler()
     if scheduled_start is not None and sch is not None:
@@ -119,8 +105,8 @@ async def handle_time_finalized(
             id=checkin_job_ids(str(instance_id))["close"], replace_existing=True,
         )
 
-    logger.info("time_finalized_handled instance=%s invites=%s", instance_id, sent)
-    return {"invited": sent}
+    logger.info("time_finalized_handled instance=%s", instance_id)
+    return {"invited": 0}
 
 
 async def handle_escalated(db: AsyncSession, instance_id: int) -> dict:

@@ -70,9 +70,9 @@ async def test_finalize_cancels_without_quorum(db, today_poll):
     assert today_poll.status == "cancelled"
 
 
-async def test_handle_time_finalized_invites_responders(db, today_poll, monkeypatch):
-    sent: list[str] = []
-    monkeypatch.setattr("app.services.invites.send_message", lambda uid, payload: sent.append(uid))
+async def test_handle_time_finalized_posts_to_space(db, today_poll, monkeypatch):
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr("app.services.invites.send_text", lambda space, text: sent.append((space, text)))
 
     p = await get_or_create_profile(db, "users/e2e_inv")
     await submit_poll(db, p, FORM_1500)  # status=responded
@@ -82,8 +82,10 @@ async def test_handle_time_finalized_invites_responders(db, today_poll, monkeypa
         db, meeting.id, "Wed", "19:00",
         scheduled_start=meeting.scheduled_start,
     )
-    assert result["invited"] == 1
-    assert "users/e2e_inv" in sent
+    assert result["invited"] == 0
+    assert len(sent) == 1
+    _, text = sent[0]
+    assert "19:00" in text
 
 
 async def test_checkin_within_window_marks_present(db, today_poll):
