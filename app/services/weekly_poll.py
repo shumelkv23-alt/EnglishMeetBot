@@ -201,6 +201,7 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
     quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
     result = resolve_day_result(votes, quorum)
 
+    duration = int((await get_or_create_config(db, "meeting_duration_minutes", 60)).value or 60)
     slot_by_time = {s.slot_start.strftime("%H:%M"): s for s in slots}
     for t in result["meetings"]:
         slot_time = slot_datetime(t).time()
@@ -209,7 +210,7 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
             poll_id=poll.id,
             selected_slot_id=slot_by_time[t].id,
             scheduled_start=scheduled_start,
-            scheduled_end=scheduled_start + timedelta(minutes=60),
+            scheduled_end=scheduled_start + timedelta(minutes=duration),
             location="Онлайн (Meet)",
             status="scheduled",
         ))

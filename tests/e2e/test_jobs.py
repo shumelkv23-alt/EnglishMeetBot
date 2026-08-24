@@ -54,6 +54,8 @@ async def test_finalize_creates_meeting_on_quorum(db, today_poll):
     ).scalars().all()
     assert len(meetings) == 1
     assert today_poll.status == "finalized"
+    m = meetings[0]
+    assert m.scheduled_end - m.scheduled_start == timedelta(minutes=60)
 
 
 async def test_finalize_cancels_without_quorum(db, today_poll):
@@ -86,6 +88,20 @@ async def test_handle_time_finalized_posts_to_space(db, today_poll, monkeypatch)
     assert len(sent) == 1
     _, text = sent[0]
     assert "19:00" in text
+
+
+async def test_send_reminder_posts_to_space(db, today_poll, monkeypatch):
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr("app.services.invites.send_text", lambda space, text: sent.append((space, text)))
+
+    meeting = await _make_meeting(db, today_poll, datetime.now(timezone.utc) + timedelta(hours=1))
+    await db.commit()
+    from app.services.invites import _send_reminder
+
+    await _send_reminder(str(meeting.id))
+    assert len(sent) == 1
+    _, text = sent[0]
+    assert "Через час" in text
 
 
 async def test_checkin_within_window_marks_present(db, today_poll):
