@@ -145,3 +145,26 @@ async def test_message_touches_activity(client, db):
         await db.execute(select(Profile).where(Profile.workspace_user_id == "users/e2e_touch_msg"))
     ).scalar_one()
     assert profile.last_activity_at is not None
+
+
+async def test_message_touches_activity_addon(client, db):
+    from sqlalchemy import select
+
+    from app.models import Profile
+
+    event = {
+        "chat": {
+            "user": {"name": "users/e2e_touch_msg_addon", "displayName": "E2E", "email": "e2e@example.com"},
+            "messagePayload": {
+                "message": {"text": "привет"},
+                "space": {"name": "spaces/e2e_dm", "type": "DM"},
+            },
+        }
+    }
+    resp = await client.post("/webhooks/google-chat", json=event)
+    assert resp.status_code == 200
+
+    profile = (
+        await db.execute(select(Profile).where(Profile.workspace_user_id == "users/e2e_touch_msg_addon"))
+    ).scalar_one()
+    assert profile.last_activity_at is not None

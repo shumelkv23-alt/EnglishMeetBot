@@ -27,7 +27,7 @@ def is_inactive(profile, now: datetime, days: int) -> bool:
     base = profile.last_activity_at or profile.created_at
     if base is None:
         return False
-    return (now - _as_utc(base)).days >= days
+    return (_as_utc(now) - _as_utc(base)).days >= days
 
 
 def should_remind(profile, now: datetime, interval_days: int, max_reminders: int) -> bool:
@@ -36,7 +36,7 @@ def should_remind(profile, now: datetime, interval_days: int, max_reminders: int
         return False
     if profile.last_reminder_at is None:
         return True
-    return (now - _as_utc(profile.last_reminder_at)).days >= interval_days
+    return (_as_utc(now) - _as_utc(profile.last_reminder_at)).days >= interval_days
 
 
 from sqlalchemy import select
@@ -51,13 +51,33 @@ DEFAULT_INTERVAL_DAYS = 3
 DEFAULT_MAX_REMINDERS = 3
 
 
+def _config_int(raw: object, default: int) -> int:
+    """Прочитать целое из config-значения; при мусоре — fallback на default."""
+    if not raw:  # None/""/0 → default (как и было: `value or default`)
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("config_invalid_int value=%r fallback=%s", raw, default)
+        return default
+
+
 async def remind_inactive(db: AsyncSession) -> int:
     """Найти неактивных активных участников и отправить им напоминание в DM."""
     from app.services.weekly_poll import get_or_create_config
 
-    days = int((await get_or_create_config(db, "inactivity_reminder_days", DEFAULT_DAYS)).value or DEFAULT_DAYS)
-    interval = int((await get_or_create_config(db, "inactivity_reminder_interval_days", DEFAULT_INTERVAL_DAYS)).value or DEFAULT_INTERVAL_DAYS)
-    max_reminders = int((await get_or_create_config(db, "inactivity_max_reminders", DEFAULT_MAX_REMINDERS)).value or DEFAULT_MAX_REMINDERS)
+    days = _config_int(
+        (await get_or_create_config(db, "inactivity_reminder_days", DEFAULT_DAYS)).value,
+        DEFAULT_DAYS,
+    )
+    interval = _config_int(
+        (await get_or_create_config(db, "inactivity_reminder_interval_days", DEFAULT_INTERVAL_DAYS)).value,
+        DEFAULT_INTERVAL_DAYS,
+    )
+    max_reminders = _config_int(
+        (await get_or_create_config(db, "inactivity_max_reminders", DEFAULT_MAX_REMINDERS)).value,
+        DEFAULT_MAX_REMINDERS,
+    )
 
     now = datetime.now(timezone.utc)
     profiles = (
