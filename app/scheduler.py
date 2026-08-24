@@ -67,6 +67,14 @@ async def _finalize_daily_poll() -> None:
         logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
 
 
+async def _run_weekly_questions() -> None:
+    """Джоб воскресенье 11:00 — рассылка еженедельных вопросов."""
+    from app.services.weekly_questions import send_weekly_questions
+
+    async with AsyncSessionLocal() as db:
+        await send_weekly_questions(db)
+
+
 def init_scheduler() -> None:
     """Создать и запустить шедулер с ежедневными джобами опроса."""
     global scheduler
@@ -88,6 +96,16 @@ def init_scheduler() -> None:
         hour=14,
         minute=5,
         id="daily-finalize",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_weekly_questions,
+        "cron",
+        day_of_week="sun",
+        hour=11,
+        minute=0,
+        id="weekly-questions",
         replace_existing=True,
         misfire_grace_time=3600,
     )
