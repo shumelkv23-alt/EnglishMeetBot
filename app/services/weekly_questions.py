@@ -25,14 +25,16 @@ def current_week_start() -> date:
     return t - timedelta(days=t.weekday())
 
 
-def questions_for_profile(interests: list[str] | None, week_start: date) -> tuple[str, str]:
+def questions_for_profile(
+    interests: list[str] | None, week_start: date, avoid: list[str] | None = None
+) -> tuple[str, str]:
     """Два вопроса недели: (персональный LLM, общий из банка).
 
-    Персональный — по интересам; при сбое LLM — запасной банковский (bank[1]).
-    Общий — bank[0], одинаковый для всех.
+    Персональный — по интересам, без повтора прошлых (avoid);
+    при сбое LLM — запасной банковский (bank[1]). Общий — bank[0], одинаковый для всех.
     """
     bank = bank_questions_for(week_start)
-    personal = generate_personal_question(interests or [])
+    personal = generate_personal_question(interests or [], avoid=avoid)
     if personal is None:
         personal = bank[1]
     return personal, bank[0]
@@ -123,7 +125,10 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         ).scalar_one()
         if answered:
             continue
-        personal_q, bank_q = await asyncio.to_thread(questions_for_profile, p.interests, week_start)
+        past = list((await db.execute(
+            select(Answer.question_text).where(Answer.profile_id == p.id)
+        )).scalars().all())
+        personal_q, bank_q = await asyncio.to_thread(questions_for_profile, p.interests, week_start, past)
         send_message(
             p.workspace_user_id,
             MessagePayload(

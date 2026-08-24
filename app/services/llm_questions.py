@@ -56,9 +56,11 @@ def generate_personal_question(
     api_key: str | None = None,
     model: str | None = None,
     timeout: float = 10.0,
+    avoid: list[str] | None = None,
 ) -> str | None:
     """Сгенерировать персональный вопрос по интересам участника.
 
+    avoid — прошлые вопросы участника; LLM просят их не повторять.
     Возвращает None при: пустом ключе, сетевой ошибке, таймауте, невалидном JSON.
     Синхронная — транспорт проекта (requests) тоже синхронный.
     """
@@ -72,6 +74,10 @@ def generate_personal_question(
         f"Интересы собеседника: {interests_text}. "
         "Сформулируй один вопрос, связанный с этими интересами."
     )
+    if avoid:
+        user_prompt += (
+            " НЕ повторяй эти прошлые вопросы: " + "; ".join(avoid) + ". Придумай новый, на другую тему."
+        )
     payload = {
         "model": model,
         "messages": [
@@ -79,7 +85,7 @@ def generate_personal_question(
             {"role": "user", "content": user_prompt},
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.8,
+        "temperature": 1.2,
         "max_tokens": 1024,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
