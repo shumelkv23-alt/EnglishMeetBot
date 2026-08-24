@@ -6,6 +6,7 @@ from google.oauth2 import id_token
 import logging
 
 from app.config import get_settings
+from app.services.games.session import GameManager, build_join_card
 from app.database import AsyncSessionLocal
 from app.services.onboarding import (
     ONBOARDING_QUESTION,
@@ -17,6 +18,57 @@ from app.services.onboarding_answers import save_onboarding_answers
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+GAME_COMMANDS = ("guesspionage", "spy")
+GAME_TITLES = {"guesspionage": "Guesspionage English", "spy": "Шпион"}
+MIN_PLAYERS = {"guesspionage": 2, "spy": 3}
+
+
+def _is_slash_command(raw_text: str) -> str | None:
+    """Извлечь имя игры из текста вида '/game'. Возвращает 'guesspionage'/'spy'/None."""
+    text = raw_text.strip().lower()
+    if not text.startswith("/"):
+        return None
+    name = text[1:].split()[0] if text[1:].strip() else ""
+    return name if name in GAME_COMMANDS else None
+
+
+def _game_command_response(game: str, space_name: str) -> dict:
+    """Создать сессию (если ещё нет) и вернуть карточку «Кто играет?»."""
+    if GameManager.get(space_name) is not None:
+        return {"text": "Игра в этом чате уже идёт — дождитесь конца раунда."}
+    GameManager.start(game, space_name)
+    return build_join_card(settings.chat_app_audience, GAME_TITLES[game])
+
+
+def _handle_join_game(user: dict, space: dict) -> JSONResponse:
+    """Кнопка «Я в деле»: добавить игрока в сессию."""
+    space_name = space.get("name", "")
+    user_id = user.get("name", "")
+    session = GameManager.join(space_name, user_id, user.get("displayName", ""))
+    if session is None:
+        return JSONResponse(content={})
+    name = user.get("displayName") or "Игрок"
+    return _addon_response({"text": f"{name} в деле! ({len(session.players)} в игре)"})
+
+
+def _start_session_game(session, space_name: str, action_url: str) -> dict:
+    """Запустить конкретную игру. Механика подключается в этапах C (guesspionage) и D (spy)."""
+    return {"text": "Механика игры ещё не подключена."}
+
+
+def _handle_start_game(space: dict) -> JSONResponse:
+    """Кнопка «Начать»: валидация по числу игроков и запуск."""
+    space_name = space.get("name", "")
+    session = GameManager.get(space_name)
+    if session is None or session.started:
+        return JSONResponse(content={})
+    min_players = MIN_PLAYERS.get(session.game, 2)
+    if len(session.players) < min_players:
+        return _addon_response({"text": f"Нужно минимум {min_players} игроков, чтобы начать."})
+    session.started = True
+    return _addon_response(_start_session_game(session, space_name, settings.chat_app_audience))
+
 
 _google_request = grequests.Request()
 
@@ -679,6 +731,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 return await _submit_daily_poll(chat_data, common, message_name=message_name)
             if method == "checkin_present":
                 return await _handle_checkin_present(chat_data, common)
+            if method == "join_game":
+                space = _extract_space_dict(chat_data)
+                return _handle_join_game(chat_data.get("user", {}), space)
+            if method == "start_game":
+                space = _extract_space_dict(chat_data)
+                return _handle_start_game(space)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 
@@ -694,6 +752,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if _is_onboarding_command(raw_text):
                 space = _extract_space_dict(chat_data)
                 return _addon_response(_onboarding_response_payload(user_name, space))
+
+            game = _is_slash_command(raw_text)
+            if game:
+                space = _extract_space_dict(chat_data)
+                return _addon_response(_game_command_response(game, space.get("name", "")))
 
             # Сохраняем профиль и ответ в БД
             user = chat_data.get("user", {})
@@ -792,6 +855,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if _is_onboarding_command(raw_text):
             space = event.get("space", {})
             return JSONResponse(content=_onboarding_response_payload(user_name, space))
+        game = _is_slash_command(raw_text)
+        if game:
+            space = event.get("space", {})
+            return JSONResponse(content=_game_command_response(game, space.get("name", "")))
         user = event.get("user", {})
         workspace_user_id = user.get("name", "")
         if workspace_user_id:
@@ -867,6 +934,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 {"parameters": {"instance": instance_id}},
             )
             return response_msg
+        if method == "join_game":
+            return _handle_join_game(event.get("user", {}), event.get("space", {}))
+        if method == "start_game":
+            return _handle_start_game(event.get("space", {}))
         logger.info("event=CARD_CLICKED format=classic function=%s method=%s", function_name, method)
         return JSONResponse(content={})
 
