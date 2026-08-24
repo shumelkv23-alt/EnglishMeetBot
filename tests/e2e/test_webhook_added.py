@@ -33,3 +33,21 @@ async def test_added_to_space_dm_registers_profile(client, db):
     assert profile is not None
     # DM-пространство фиксируется — оно нужно для проактивных DM-рассылок
     assert profile.chat_space_id == "spaces/e2e_dm"
+
+
+def _membership_added(member_id: str, space_name: str = "spaces/e2e_group") -> dict:
+    return {
+        "type": "MEMBERSHIP_ADDED",
+        "space": {"name": space_name, "type": "SPACE"},
+        "membership": {"member": {"name": member_id, "type": "HUMAN"}},
+    }
+
+
+async def test_membership_added_registers_profile(client, db):
+    resp = await client.post("/webhooks/google-chat", json=_membership_added("users/e2e_member"))
+    assert resp.status_code == 200
+
+    profile = (
+        await db.execute(select(Profile).where(Profile.workspace_user_id == "users/e2e_member"))
+    ).scalar_one_or_none()
+    assert profile is not None

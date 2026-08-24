@@ -566,6 +566,30 @@ async def _run_onboarding(space_name: str, space: dict) -> dict:
     return plan
 
 
+async def _handle_member_added(space_name: str, member_name: str) -> None:
+    """Новый участник в группе: зарегистрировать и запустить онбординг."""
+    if not member_name or not member_name.startswith("users/"):
+        return
+    from app.messaging import send_message
+    from app.schemas import MessagePayload
+    from app.services.chat_sender import send_text
+
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(db, workspace_user_id=member_name)
+            if profile.onboarding_completed:
+                return  # уже онборднут — не трогаем
+            if profile.chat_space_id:
+                send_message(
+                    member_name,
+                    MessagePayload(text="Привет! Заполни короткую анкету 🙌", card=_onboarding_card("друг")),
+                )
+            elif space_name:
+                send_text(space_name, f"<{member_name}> — напиши мне в личку, чтобы пройти анкету 👋")
+    except Exception:
+        logger.exception("member_added_onboarding_failed member=%s", member_name)
+
+
 def _reply_text(user_name: str, raw_text: str) -> str:
     """Текст ответа на MESSAGE: приветствие или echo."""
     if "привет" in raw_text.lower():
@@ -704,6 +728,18 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             await _run_onboarding(space_name, space)
             return JSONResponse(content={})
 
+        # Нового участника добавили в существующую группу
+        if "membershipAddedPayload" in chat_data:
+            payload = chat_data["membershipAddedPayload"]
+            space = payload.get("space", {})
+            space_name = space.get("name", "")
+            membership = payload.get("membership", {})
+            member = membership.get("member", {})
+            member_name = member.get("name", "")
+            logger.info("event=MEMBERSHIP_ADDED format=addon member=%s space=%s", member_name, space_name)
+            await _handle_member_added(space_name, member_name)
+            return JSONResponse(content={})
+
         # Нажали кнопку на карточке (submit анкеты онбординга)
         action = chat_data.get("action", {})
         function_name = action.get("function") or action.get("functionName") or action.get("actionMethodName")
@@ -729,6 +765,16 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         await _register_contact(event, space_name)
         # Онбординг: анкета в личку / @упоминание в группу
         await _run_onboarding(space_name, space)
+        return JSONResponse(content={})
+
+    if event_type == "MEMBERSHIP_ADDED":
+        space = event.get("space", {})
+        space_name = space.get("name", "")
+        membership = event.get("membership", {})
+        member = membership.get("member", {})
+        member_name = member.get("name", "")
+        logger.info("event=MEMBERSHIP_ADDED format=classic member=%s", member_name)
+        await _handle_member_added(space_name, member_name)
         return JSONResponse(content={})
 
     if event_type == "MESSAGE":
