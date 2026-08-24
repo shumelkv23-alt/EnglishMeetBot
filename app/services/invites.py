@@ -38,7 +38,7 @@ from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.messaging import send_message
 from app.services.chat_sender import send_message as send_space_message, send_text
-from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
+from app.models import Config, MeetingInstance as MeetingORM
 from app.schemas import MessagePayload
 from app.services.checkin import checkin_window, build_checkin_card, job_ids as checkin_job_ids
 from app.services.invites import _theme_from_activity  # noqa: F401  (переэкспорт для API)
@@ -56,16 +56,6 @@ def _scheduler() -> object | None:
     from app.scheduler import scheduler
 
     return scheduler
-
-
-async def _profiles_of_poll(db: AsyncSession, poll_id: int) -> list[Profile]:
-    """Все профили, связанные с опросом (responded и pending)."""
-    return (await db.execute(
-        select(Profile).join(PollResponse, PollResponse.profile_id == Profile.id).where(
-            PollResponse.poll_id == poll_id,
-            Profile.workspace_user_id.isnot(None),
-        )
-    )).scalars().all()
 
 
 async def handle_time_finalized(
@@ -121,7 +111,7 @@ async def handle_escalated(db: AsyncSession, instance_id: int) -> dict:
 
 
 async def _send_reminder(instance_id: str) -> None:
-    """Напоминание за lead_hours до встречи участникам её опроса (REQ-9.2)."""
+    """Напоминание за lead_hours до встречи — в общий Space (REQ-9.2)."""
     async with AsyncSessionLocal() as db:
         meeting = (
             await db.execute(select(MeetingORM).where(MeetingORM.id == int(instance_id)))
@@ -129,18 +119,15 @@ async def _send_reminder(instance_id: str) -> None:
         if meeting is None:
             logger.warning("reminder_no_meeting instance=%s", instance_id)
             return
-        profiles = await _profiles_of_poll(db, meeting.poll_id)
         text = build_invite_text(
             meeting.scheduled_start.strftime("%a"),
             meeting.scheduled_start.strftime("%H:%M"),
             None,
         )
-        for profile in profiles:
-            send_message(
-                profile.workspace_user_id,
-                MessagePayload(text=f"⏰ Через час встреча по английскому!\n\n{text}"),
-            )
-        logger.info("reminder_sent instance=%s profiles=%s", instance_id, len(profiles))
+        space_id = await _config_value(db, "space_id", "")
+        if space_id:
+            send_text(space_id, f"⏰ Через час встреча по английскому!\n\n{text}")
+        logger.info("reminder_sent instance=%s", instance_id)
 
 
 def _open_checkin(space_id: str, card: dict) -> None:
