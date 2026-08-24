@@ -66,6 +66,10 @@ def _start_session_game(session, space_name: str, action_url: str) -> dict:
         from app.services.games.guesspionage import start_guesspionage
 
         return start_guesspionage(session, space_name, action_url)
+    if session.game == "spy":
+        from app.services.games.spy import start_spy
+
+        return start_spy(session, action_url)
     return {"text": "Механика игры ещё не подключена."}
 
 
@@ -105,6 +109,32 @@ async def _handle_guesspionage_vote(user: dict, space: dict, params: dict) -> JS
     choice = params.get("choice", "higher")
     async with AsyncSessionLocal() as db:
         result = await guesspionage_vote(db, session, user.get("name", ""), choice, space_name)
+    if result is None:
+        return JSONResponse(content={})
+    return _addon_response(result)
+
+
+def _handle_spy_start_vote(space: dict) -> JSONResponse:
+    """Кнопка «Начать голосование»: показать карточку «Кто шпион?»."""
+    from app.services.games.spy import build_spy_vote_card
+
+    session = GameManager.get(space.get("name", ""))
+    if session is None:
+        return JSONResponse(content={})
+    return _addon_response(build_spy_vote_card(session.names, session.players, settings.chat_app_audience))
+
+
+async def _handle_spy_vote(user: dict, space: dict, params: dict) -> JSONResponse:
+    """Голос «кто шпион»."""
+    from app.services.games.spy import vote as spy_vote
+
+    space_name = space.get("name", "")
+    session = GameManager.get(space_name)
+    if session is None:
+        return JSONResponse(content={})
+    target = params.get("target", "")
+    async with AsyncSessionLocal() as db:
+        result = await spy_vote(db, session, user.get("name", ""), target, space_name)
     if result is None:
         return JSONResponse(content={})
     return _addon_response(result)
@@ -789,6 +819,14 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                     _extract_space_dict(chat_data),
                     _normalize_params(common.get("parameters")),
                 )
+            if method == "spy_start_vote":
+                return _handle_spy_start_vote(_extract_space_dict(chat_data))
+            if method == "spy_vote":
+                return await _handle_spy_vote(
+                    chat_data.get("user", {}),
+                    _extract_space_dict(chat_data),
+                    _normalize_params(common.get("parameters")),
+                )
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 
@@ -997,6 +1035,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             )
         if method == "guesspionage_higher_lower":
             return await _handle_guesspionage_vote(
+                event.get("user", {}), event.get("space", {}), _normalize_params(action.get("parameters"))
+            )
+        if method == "spy_start_vote":
+            return _handle_spy_start_vote(event.get("space", {}))
+        if method == "spy_vote":
+            return await _handle_spy_vote(
                 event.get("user", {}), event.get("space", {}), _normalize_params(action.get("parameters"))
             )
         logger.info("event=CARD_CLICKED format=classic function=%s method=%s", function_name, method)
