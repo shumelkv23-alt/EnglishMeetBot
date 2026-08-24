@@ -203,7 +203,8 @@ async def _submit_weekly_question(chat_data: dict, common: dict) -> JSONResponse
     params = common.get("parameters") or {}
     if isinstance(params, list):
         params = {p.get("key"): p.get("value") for p in params if isinstance(p, dict)}
-    question = params.get("question", "")
+    q_llm_text = params.get("q_llm_text", "")
+    q_bank_text = params.get("q_bank_text", "")
     user = chat_data.get("user", {})
     workspace_user_id = user.get("name", "")
     result = {"ok": False, "reason": "no_user"}
@@ -218,7 +219,7 @@ async def _submit_weekly_question(chat_data: dict, common: dict) -> JSONResponse
                 )
                 from app.services.weekly_questions import submit_weekly_question
 
-                result = await submit_weekly_question(db, profile, form_inputs, question)
+                result = await submit_weekly_question(db, profile, form_inputs, q_llm_text, q_bank_text)
         except Exception:
             logger.exception("weekly_question_submit_failed")
             result = {"ok": False, "reason": "db_error"}

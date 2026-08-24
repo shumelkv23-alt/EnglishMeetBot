@@ -1,4 +1,4 @@
-"""Еженедельный вопрос: карточка, выбор вопроса, сабмит и рассылка."""
+"""Еженедельный вопрос: карточка, выбор вопросов, сабмит и рассылка."""
 import asyncio
 import logging
 from datetime import date, timedelta
@@ -25,31 +25,43 @@ def current_week_start() -> date:
     return t - timedelta(days=t.weekday())
 
 
-def question_for_profile(interests: list[str] | None, week_start: date) -> str:
-    """Персональный вопрос: LLM по интересам, fallback — банк недели."""
-    question = generate_personal_question(interests or [])
-    if question is not None:
-        return question
-    return bank_questions_for(week_start)[0]
+def questions_for_profile(interests: list[str] | None, week_start: date) -> tuple[str, str]:
+    """Два вопроса недели: (персональный LLM, общий из банка).
+
+    Персональный — по интересам; при сбое LLM — запасной банковский (bank[1]).
+    Общий — bank[0], одинаковый для всех.
+    """
+    bank = bank_questions_for(week_start)
+    personal = generate_personal_question(interests or [])
+    if personal is None:
+        personal = bank[1]
+    return personal, bank[0]
 
 
-def build_weekly_question_card(question: str, action_url: str) -> dict:
-    """Карточка еженедельного вопроса: текст + поле + кнопка «Отправить ответ»."""
+def build_weekly_question_card(personal_q: str, bank_q: str, action_url: str) -> dict:
+    """Карточка недели: два вопроса + два поля + кнопка «Отправить ответы»."""
     return {
         "cardsV2": [{
             "cardId": "weeklyQuestion",
             "card": {
                 "header": {"title": "Вопрос недели 💭", "subtitle": "Ответь — из ответов соберём активность"},
                 "sections": [
-                    {"widgets": [{"textParagraph": {"text": question}}]},
-                    {"widgets": [{"textInput": {"name": "answer", "label": "Твой ответ"}}]},
+                    {"header": "Личный вопрос", "widgets": [
+                        {"textParagraph": {"text": personal_q}},
+                        {"textInput": {"name": "q_llm", "label": "Твой ответ"}},
+                    ]},
+                    {"header": "Общий вопрос", "widgets": [
+                        {"textParagraph": {"text": bank_q}},
+                        {"textInput": {"name": "q_bank", "label": "Твой ответ"}},
+                    ]},
                     {"widgets": [{"buttonList": {"buttons": [{
-                        "text": "Отправить ответ",
+                        "text": "Отправить ответы",
                         "onClick": {"action": {
                             "function": action_url or "submit_weekly_question",
                             "parameters": [
                                 {"key": "method", "value": "submit_weekly_question"},
-                                {"key": "question", "value": question},
+                                {"key": "q_llm_text", "value": personal_q},
+                                {"key": "q_bank_text", "value": bank_q},
                             ],
                         }},
                     }]}}]},
@@ -60,18 +72,29 @@ def build_weekly_question_card(question: str, action_url: str) -> dict:
 
 
 async def submit_weekly_question(
-    db: AsyncSession, profile: Profile, form_inputs: dict, question_text: str
+    db: AsyncSession, profile: Profile, form_inputs: dict, q_llm_text: str, q_bank_text: str
 ) -> dict:
-    """Сохранить ответ на еженедельный вопрос в answers."""
-    values = parse_form_inputs(form_inputs).get("answer", [])
-    if not values:
+    """Сохранить ответы на оба вопроса недели в answers."""
+    values = parse_form_inputs(form_inputs)
+    llm_answer = values.get("q_llm", [])
+    bank_answer = values.get("q_bank", [])
+    if not llm_answer and not bank_answer:
         return {"ok": False, "reason": "empty"}
-    db.add(Answer(
-        profile_id=profile.id,
-        question_text=question_text or "Вопрос недели",
-        answer_text=values[0],
-        week_start=current_week_start(),
-    ))
+    week_start = current_week_start()
+    if llm_answer:
+        db.add(Answer(
+            profile_id=profile.id,
+            question_text=q_llm_text or "Личный вопрос",
+            answer_text=llm_answer[0],
+            week_start=week_start,
+        ))
+    if bank_answer:
+        db.add(Answer(
+            profile_id=profile.id,
+            question_text=q_bank_text or "Общий вопрос",
+            answer_text=bank_answer[0],
+            week_start=week_start,
+        ))
     await db.commit()
     logger.info("weekly_question_answered profile=%s", profile.id)
     return {"ok": True, "reason": "saved"}
@@ -100,12 +123,12 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         ).scalar_one()
         if answered:
             continue
-        question = await asyncio.to_thread(question_for_profile, p.interests, week_start)
+        personal_q, bank_q = await asyncio.to_thread(questions_for_profile, p.interests, week_start)
         send_message(
             p.workspace_user_id,
             MessagePayload(
                 text="Вопрос недели 💭",
-                card=build_weekly_question_card(question, get_settings().chat_app_audience),
+                card=build_weekly_question_card(personal_q, bank_q, get_settings().chat_app_audience),
             ),
         )
         sent += 1
