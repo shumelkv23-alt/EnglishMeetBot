@@ -1,4 +1,5 @@
 """Еженедельный вопрос: карточка, выбор вопроса, сабмит и рассылка."""
+import asyncio
 import logging
 from datetime import date, timedelta
 
@@ -99,7 +100,7 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         ).scalar_one()
         if answered:
             continue
-        question = question_for_profile(p.interests, week_start)
+        question = await asyncio.to_thread(question_for_profile, p.interests, week_start)
         send_message(
             p.workspace_user_id,
             MessagePayload(
