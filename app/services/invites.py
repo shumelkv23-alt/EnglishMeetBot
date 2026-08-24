@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.messaging import send_message
-from app.services.chat_sender import send_text
+from app.services.chat_sender import send_message as send_space_message, send_text
 from app.models import Config, MeetingInstance as MeetingORM, PollResponse, Profile
 from app.schemas import MessagePayload
 from app.services.checkin import checkin_window, build_checkin_card, job_ids as checkin_job_ids
@@ -146,7 +146,7 @@ async def _send_reminder(instance_id: str) -> None:
 def _open_checkin(space_id: str, card: dict) -> None:
     """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space."""
     if space_id:
-        send_message(space_id, MessagePayload(text="Встреча начинается — отметься! ✅", card=card))
+        send_space_message(space_id, text="Встреча начинается — отметься! ✅", cards_v2=card.get("cardsV2"))
 
 
 def _close_checkin() -> None:
