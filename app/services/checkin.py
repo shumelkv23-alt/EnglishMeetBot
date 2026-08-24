@@ -107,6 +107,9 @@ async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, a
         if within:
             attendance.status = "present"
 
+    from app.services.inactivity import touch_activity
+
+    touch_activity(profile, now)
     await db.commit()
     count = (
         await db.execute(

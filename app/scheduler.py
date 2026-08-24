@@ -108,6 +108,15 @@ async def _poll_new_members() -> None:
             send_text(space_id, f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋")
 
 
+async def _run_inactivity_reminder() -> None:
+    """Джоб: напомнить неактивным участникам о встречах."""
+    from app.services.inactivity import remind_inactive
+
+    async with AsyncSessionLocal() as db:
+        sent = await remind_inactive(db)
+        logger.info("inactivity_reminder_job sent=%s", sent)
+
+
 async def init_scheduler() -> None:
     """Создать и запустить шедулер; время джобов — из config."""
     global scheduler
@@ -122,6 +131,7 @@ async def init_scheduler() -> None:
         fin_m = int((await get_or_create_config(db, "poll_finalize_minute", 5)).value or 5)
         weekly_day = str((await get_or_create_config(db, "weekly_poll_day", "sun")).value or "sun")
         weekly_hour = int((await get_or_create_config(db, "weekly_poll_hour", 11)).value or 11)
+        rem_h = int((await get_or_create_config(db, "inactivity_reminder_hour", 11)).value or 11)
 
     scheduler = AsyncIOScheduler(timezone=get_settings().app_timezone)
     scheduler.add_job(
@@ -158,6 +168,15 @@ async def init_scheduler() -> None:
         minutes=10,
         id="onboarding-poll",
         replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_inactivity_reminder,
+        "cron",
+        hour=rem_h,
+        minute=0,
+        id="inactivity-reminder",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     logger.info("scheduler_started")

@@ -266,6 +266,9 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
         response.status = "responded"
         response.responded_at = datetime.now(timezone.utc)
 
+    from app.services.inactivity import touch_activity
+
+    touch_activity(profile, datetime.now(timezone.utc))
     await db.commit()
     return {"ok": True, "reason": "saved"}
 
