@@ -42,7 +42,11 @@ async def _run_daily_poll() -> None:
 
 
 async def _finalize_daily_poll() -> None:
-    """Джоб 14:05 — подвести итог опроса дня и оповестить группу."""
+    """Джоб финализации: подвести итог, создать встречи, запустить ENG-7."""
+    from sqlalchemy import select
+
+    from app.models import MeetingInstance
+    from app.services.invites import handle_time_finalized
     from app.services.weekly_poll import active_daily_poll, finalize_daily_poll, today
 
     async with AsyncSessionLocal() as db:
@@ -58,8 +62,16 @@ async def _finalize_daily_poll() -> None:
                         poll.id, poll.status)
             return
         if result["meetings"]:
-            for t in result["meetings"]:
-                send_space_message(space_id, text=f"Встреча сегодня в {t} 🎉")
+            meetings = (
+                await db.execute(select(MeetingInstance).where(MeetingInstance.poll_id == poll.id))
+            ).scalars().all()
+            for m in meetings:
+                await handle_time_finalized(
+                    db, m.id,
+                    m.scheduled_start.strftime("%a"),
+                    m.scheduled_start.strftime("%H:%M"),
+                    scheduled_start=m.scheduled_start,
+                )
             for choice, target in result["suggest_to"].items():
                 send_space_message(space_id, text=f"Тем, кто выбрал {choice} — встреча также в {target}")
         else:
@@ -75,17 +87,27 @@ async def _run_weekly_questions() -> None:
         await send_weekly_questions(db)
 
 
-def init_scheduler() -> None:
-    """Создать и запустить шедулер с ежедневными джобами опроса."""
+async def init_scheduler() -> None:
+    """Создать и запустить шедулер; время джобов — из config."""
     global scheduler
     if scheduler is not None:
         return
+    from app.services.weekly_poll import get_or_create_config
+
+    async with AsyncSessionLocal() as db:
+        run_h = int((await get_or_create_config(db, "poll_run_hour", 9)).value or 9)
+        run_m = int((await get_or_create_config(db, "poll_run_minute", 0)).value or 0)
+        fin_h = int((await get_or_create_config(db, "poll_finalize_hour", 14)).value or 14)
+        fin_m = int((await get_or_create_config(db, "poll_finalize_minute", 5)).value or 5)
+        weekly_day = str((await get_or_create_config(db, "weekly_poll_day", "sun")).value or "sun")
+        weekly_hour = int((await get_or_create_config(db, "weekly_poll_hour", 11)).value or 11)
+
     scheduler = AsyncIOScheduler(timezone=get_settings().app_timezone)
     scheduler.add_job(
         _run_daily_poll,
         "cron",
-        hour=9,
-        minute=0,
+        hour=run_h,
+        minute=run_m,
         id="daily-poll",
         replace_existing=True,
         misfire_grace_time=3600,
@@ -93,8 +115,8 @@ def init_scheduler() -> None:
     scheduler.add_job(
         _finalize_daily_poll,
         "cron",
-        hour=14,
-        minute=5,
+        hour=fin_h,
+        minute=fin_m,
         id="daily-finalize",
         replace_existing=True,
         misfire_grace_time=3600,
@@ -102,8 +124,8 @@ def init_scheduler() -> None:
     scheduler.add_job(
         _run_weekly_questions,
         "cron",
-        day_of_week="sun",
-        hour=11,
+        day_of_week=weekly_day,
+        hour=weekly_hour,
         minute=0,
         id="weekly-questions",
         replace_existing=True,
