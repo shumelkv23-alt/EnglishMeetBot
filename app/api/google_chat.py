@@ -197,6 +197,36 @@ async def _submit_onboarding(user: dict, space: dict, form_inputs: dict) -> dict
     }
 
 
+async def _submit_weekly_question(chat_data: dict, common: dict) -> JSONResponse:
+    """Сохранить ответ на еженедельный вопрос."""
+    form_inputs = common.get("formInputs", {}) or {}
+    params = common.get("parameters") or {}
+    if isinstance(params, list):
+        params = {p.get("key"): p.get("value") for p in params if isinstance(p, dict)}
+    question = params.get("question", "")
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    result = {"ok": False, "reason": "no_user"}
+    if workspace_user_id:
+        try:
+            space = _extract_space_dict(chat_data)
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                    chat_space_id=_dm_space_name(space),
+                )
+                from app.services.weekly_questions import submit_weekly_question
+
+                result = await submit_weekly_question(db, profile, form_inputs, question)
+        except Exception:
+            logger.exception("weekly_question_submit_failed")
+            result = {"ok": False, "reason": "db_error"}
+    if result.get("ok"):
+        return _addon_response({"text": "Спасибо за ответ! 🎉"})
+    return _addon_response({"text": "Напиши ответ и нажми «Отправить ответ»."})
+
+
 def _is_onboarding_command(raw_text: str) -> bool:
     """Пользователь явно просит показать анкету онбординга."""
     lowered = raw_text.lower().strip()
@@ -614,6 +644,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 user = chat_data.get("user", {})
                 response_msg = await _submit_onboarding(user, space, form_inputs)
                 return _addon_response(response_msg)
+            if method == "submit_weekly_question":
+                return await _submit_weekly_question(chat_data, common)
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
             if method == "submit_daily_poll":

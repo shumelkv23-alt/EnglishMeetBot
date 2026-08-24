@@ -4,10 +4,11 @@
 посторонние активные профили (реальные данные разработчика). Чтобы тест был
 изолированным, смотрим только на отправки пользователям users/e2e_*.
 """
+import httpx
 import pytest
 from sqlalchemy import select
 
-from app.models import Answer
+from app.models import Answer, Profile
 from app.services.onboarding import get_or_create_profile
 from app.services.weekly_questions import send_weekly_questions, submit_weekly_question
 
@@ -28,6 +29,30 @@ async def test_submit_weekly_question_saves_answer(db):
     a = (await db.execute(select(Answer).where(Answer.profile_id == p.id))).scalar_one()
     assert a.question_text == "Любимый фильм?"
     assert a.answer_text == "мой ответ"
+
+
+async def test_webhook_submit_weekly_question(client, db):
+    event = {
+        "commonEventObject": {
+            "formInputs": FORM,
+            "parameters": {"method": "submit_weekly_question", "question": "Любимый фильм?"},
+        },
+        "chat": {
+            "user": {"name": "users/e2e_wq_webhook", "displayName": "E2E", "email": "e2e@example.com"},
+            "buttonClickedPayload": {"space": {"name": "spaces/e2e_wq", "type": "DM"}},
+        },
+    }
+    resp = await client.post("/webhooks/google-chat", json=event)
+    assert resp.status_code == 200
+    body = resp.json()
+    text = body["hostAppDataAction"]["chatDataAction"]["createMessageAction"]["message"]["text"]
+    assert "Спасибо за ответ" in text
+    a = (
+        await db.execute(
+            select(Answer).join(Profile).where(Profile.workspace_user_id == "users/e2e_wq_webhook")
+        )
+    ).scalar_one()
+    assert a.question_text == "Любимый фильм?"
 
 
 async def test_submit_weekly_question_rejects_empty(db):
