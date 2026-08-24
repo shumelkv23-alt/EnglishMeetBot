@@ -41,6 +41,15 @@ def _game_command_response(game: str, space_name: str) -> dict:
     return build_join_card(settings.chat_app_audience, GAME_TITLES[game])
 
 
+def _normalize_params(raw) -> dict[str, str]:
+    """parameters из события в плоский {key: value} (понимает list[{key,value}] и dict)."""
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items() if k and k != "__action_method_name__"}
+    if isinstance(raw, list):
+        return {str(p.get("key")): str(p.get("value")) for p in raw if isinstance(p, dict) and p.get("key")}
+    return {}
+
+
 def _handle_join_game(user: dict, space: dict) -> JSONResponse:
     """Кнопка «Я в деле»: добавить игрока в сессию."""
     space_name = space.get("name", "")
@@ -53,7 +62,10 @@ def _handle_join_game(user: dict, space: dict) -> JSONResponse:
 
 
 def _start_session_game(session, space_name: str, action_url: str) -> dict:
-    """Запустить конкретную игру. Механика подключается в этапах C (guesspionage) и D (spy)."""
+    if session.game == "guesspionage":
+        from app.services.games.guesspionage import start_guesspionage
+
+        return start_guesspionage(session, space_name, action_url)
     return {"text": "Механика игры ещё не подключена."}
 
 
@@ -68,6 +80,34 @@ def _handle_start_game(space: dict) -> JSONResponse:
         return _addon_response({"text": f"Нужно минимум {min_players} игроков, чтобы начать."})
     session.started = True
     return _addon_response(_start_session_game(session, space_name, settings.chat_app_audience))
+
+
+def _handle_guesspionage_submit_guess(user: dict, form_inputs: dict, params: dict) -> JSONResponse:
+    """Называющий прислал число (из лички): принять и огласить группе."""
+    from app.services.games.guesspionage import submit_guess
+
+    space_name = params.get("space", "")
+    session = GameManager.get(space_name)
+    if session is None:
+        return JSONResponse(content={})
+    result = submit_guess(session, user.get("name", ""), form_inputs, space_name, settings.chat_app_audience)
+    return _addon_response(result)
+
+
+async def _handle_guesspionage_vote(user: dict, space: dict, params: dict) -> JSONResponse:
+    """Голос «выше/ниже» из группы."""
+    from app.services.games.guesspionage import vote as guesspionage_vote
+
+    space_name = space.get("name", "")
+    session = GameManager.get(space_name)
+    if session is None:
+        return JSONResponse(content={})
+    choice = params.get("choice", "higher")
+    async with AsyncSessionLocal() as db:
+        result = await guesspionage_vote(db, session, user.get("name", ""), choice, space_name)
+    if result is None:
+        return JSONResponse(content={})
+    return _addon_response(result)
 
 
 _google_request = grequests.Request()
@@ -737,6 +777,18 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if method == "start_game":
                 space = _extract_space_dict(chat_data)
                 return _handle_start_game(space)
+            if method == "submit_guesspionage_guess":
+                return _handle_guesspionage_submit_guess(
+                    chat_data.get("user", {}),
+                    common.get("formInputs", {}),
+                    _normalize_params(common.get("parameters")),
+                )
+            if method == "guesspionage_higher_lower":
+                return await _handle_guesspionage_vote(
+                    chat_data.get("user", {}),
+                    _extract_space_dict(chat_data),
+                    _normalize_params(common.get("parameters")),
+                )
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
             return JSONResponse(content={})
 
@@ -938,6 +990,15 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             return _handle_join_game(event.get("user", {}), event.get("space", {}))
         if method == "start_game":
             return _handle_start_game(event.get("space", {}))
+        if method == "submit_guesspionage_guess":
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            return _handle_guesspionage_submit_guess(
+                event.get("user", {}), form_inputs, _normalize_params(action.get("parameters"))
+            )
+        if method == "guesspionage_higher_lower":
+            return await _handle_guesspionage_vote(
+                event.get("user", {}), event.get("space", {}), _normalize_params(action.get("parameters"))
+            )
         logger.info("event=CARD_CLICKED format=classic function=%s method=%s", function_name, method)
         return JSONResponse(content={})
 
