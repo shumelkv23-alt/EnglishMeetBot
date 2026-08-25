@@ -25,12 +25,19 @@ MIN_PLAYERS = {"guesspionage": 2, "spy": 3}
 
 
 def _is_slash_command(raw_text: str) -> str | None:
-    """Извлечь имя игры из текста вида '/game'. Возвращает 'guesspionage'/'spy'/None."""
+    """Извлечь имя игры из текста вида '/spy' или '!spy'. Возвращает 'guesspionage'/'spy'/None.
+
+    Google Chat перехватывает '/...' как нативную слэш-команду и не доставляет её как
+    MESSAGE, поэтому реальный триггер в чате — '!' (слэш остаётся для тестов, которые
+    шлют запросы напрямую в обход Google).
+    """
     text = raw_text.strip().lower()
-    if not text.startswith("/"):
-        return None
-    name = text[1:].split()[0] if text[1:].strip() else ""
-    return name if name in GAME_COMMANDS else None
+    for prefix in ("/", "!"):
+        if text.startswith(prefix):
+            name = text[1:].split()[0] if text[1:].strip() else ""
+            if name in GAME_COMMANDS:
+                return name
+    return None
 
 
 def _game_command_response(game: str, space_name: str) -> dict:
