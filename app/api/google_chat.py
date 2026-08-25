@@ -785,6 +785,35 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
     return _addon_response({"text": "Couldn't save — try again."})
 
 
+async def _handle_confirm_attendance(user: dict, params: dict) -> JSONResponse:
+    """Подтверждение явки из лички (тоггл): No — снять голос, Yes — вернуть/оставить."""
+    workspace_user_id = user.get("name", "")
+    try:
+        day = int(params.get("day", ""))
+    except (TypeError, ValueError):
+        day = -1
+    answer = params.get("answer", "")
+    if not workspace_user_id or day < 0 or answer not in ("yes", "no"):
+        return _addon_response({"text": "Couldn't process that 🤷"})
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
+            from app.services.weekly_poll import DAY_FULL, decline_day, restore_day
+
+            if answer == "no":
+                removed = await decline_day(db, profile, day)
+                if removed:
+                    return _addon_response({"text": f"Got it — you're out for {DAY_FULL[day]} ❌"})
+                return _addon_response({"text": "You didn't have a vote for that day."})
+            restored = await restore_day(db, profile, day)
+            if restored:
+                return _addon_response({"text": f"Welcome back — you're in for {DAY_FULL[day]} ✅"})
+            return _addon_response({"text": "See you there! ✅"})
+    except Exception:
+        logger.exception("confirm_attendance_failed")
+        return _addon_response({"text": "Couldn't process that 🤒"})
+
+
 async def _submit_onboarding(user: dict, space: dict, form_inputs: dict) -> dict:
     """Сохранить анкету онбординга и вернуть текстовое сообщение для пользователя."""
     workspace_user_id = user.get("name", "")
@@ -1315,6 +1344,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 return await _submit_daily_poll(chat_data, common, message_name=message_name)
             if method == "checkin_present":
                 return await _handle_checkin_present(chat_data, common)
+            if method == "confirm_attendance":
+                return await _handle_confirm_attendance(
+                    chat_data.get("user", {}),
+                    _normalize_params(common.get("parameters")),
+                )
             if method == "join_game":
                 space = _extract_space_dict(chat_data)
                 message_name = (chat_data.get("buttonClickedPayload", {}).get("message") or {}).get("name")
@@ -1609,6 +1643,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 {"parameters": {"instance": instance_id}},
             )
             return response_msg
+        if method == "confirm_attendance":
+            return await _handle_confirm_attendance(
+                event.get("user", {}),
+                _normalize_params(action.get("parameters")),
+            )
         if method == "join_game":
             return _handle_join_game(event.get("user", {}), event.get("space", {}), (event.get("message") or {}).get("name"))
         if method == "start_game":

@@ -19,27 +19,12 @@ scheduler: AsyncIOScheduler | None = None
 
 async def _run_weekly_poll() -> None:
     """Джоб в понедельник — создать опрос недели (день+время) и отправить карточку в группу."""
-    from app.services.weekly_poll import (
-        build_weekly_poll_card,
-        ensure_weekly_poll,
-        get_or_create_config,
-        poll_counts,
-    )
+    from app.services.weekly_poll import ensure_weekly_poll, send_weekly_poll_card
 
     async with AsyncSessionLocal() as db:
         poll = await ensure_weekly_poll(db)
-        space_id = (await get_or_create_config(db, "space_id", "")).value or ""
-        if space_id:
-            days, times, counts = await poll_counts(db, poll.id)
-            card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
-            send_space_message(
-                space_id,
-                text="When can you meet this week? 🗓️",
-                cards_v2=card.get("cardsV2"),
-            )
-            logger.info("weekly_poll_job sent poll=%s space=%s", poll.id, space_id)
-        else:
-            logger.info("weekly_poll_job skipped poll=%s space_id=%r", poll.id, space_id)
+        await send_weekly_poll_card(db, poll)
+        logger.info("weekly_poll_job sent poll=%s", poll.id)
 
 
 async def _check_today_quorum() -> None:
@@ -64,6 +49,46 @@ async def _check_today_quorum() -> None:
             db, meeting.id, DAYS[dow], time_str, scheduled_start=meeting.scheduled_start,
         )
         logger.info("quorum_check_job notified day=%s time=%s", DAYS[dow], time_str)
+
+
+async def _send_day_confirmations(now: datetime | None = None) -> None:
+    """Ежедневный вечерний джоб — подтверждение явки на завтра тем, кто проголосовал.
+
+    now — опционально, чтобы вручную симулировать «сейчас вечер понедельника».
+    """
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.services.chat_sender import find_user_dm_space, send_message as send_space_message
+    from app.services.weekly_poll import (
+        active_weekly_poll,
+        build_confirmation_card,
+        day_voter_profiles,
+    )
+
+    if now is None:
+        now = datetime.now(ZoneInfo(get_settings().app_timezone))
+    tomorrow_dow = (now + timedelta(days=1)).weekday()
+    if tomorrow_dow == 0:  # понедельник следующей недели — не в текущем опросе
+        return
+
+    async with AsyncSessionLocal() as db:
+        poll = await active_weekly_poll(db)
+        if poll is None:
+            return
+        voters = await day_voter_profiles(db, poll.id, tomorrow_dow)
+        card = build_confirmation_card(tomorrow_dow, get_settings().chat_app_audience)
+        sent = 0
+        for p in voters:
+            dm = find_user_dm_space(p.workspace_user_id or "")
+            if not dm:
+                continue
+            try:
+                send_space_message(dm, cards_v2=card["cardsV2"])
+                sent += 1
+            except Exception:
+                logger.exception("day_confirmation_send_failed profile=%s", p.id)
+    logger.info("day_confirmations_sent day=%s count=%s", tomorrow_dow, sent)
 
 
 async def _run_weekly_questions() -> None:
@@ -122,6 +147,7 @@ async def init_scheduler() -> None:
         run_h = int((await get_or_create_config(db, "poll_run_hour", 9)).value or 9)
         run_m = int((await get_or_create_config(db, "poll_run_minute", 0)).value or 0)
         check_h = int((await get_or_create_config(db, "quorum_check_hour", 10)).value or 10)
+        confirm_h = int((await get_or_create_config(db, "confirm_hour", 18)).value or 18)
         weekly_day = str((await get_or_create_config(db, "weekly_poll_day", "sun")).value or "sun")
         weekly_hour = int((await get_or_create_config(db, "weekly_poll_hour", 11)).value or 11)
         rem_h = int((await get_or_create_config(db, "inactivity_reminder_hour", 11)).value or 11)
@@ -143,6 +169,15 @@ async def init_scheduler() -> None:
         hour=check_h,
         minute=0,
         id="daily-quorum-check",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _send_day_confirmations,
+        "cron",
+        hour=confirm_h,
+        minute=0,
+        id="day-confirmations",
         replace_existing=True,
         misfire_grace_time=3600,
     )

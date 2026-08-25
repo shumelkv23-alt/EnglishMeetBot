@@ -5,6 +5,7 @@ from app.services.form_parsing import parse_form_inputs
 from app.services.weekly_poll import (
     _is_valid_submit_time,
     _normalize_submit,
+    build_confirmation_card,
     build_weekly_poll_card,
     parse_day,
     slot_datetime,
@@ -91,3 +92,14 @@ def test_build_weekly_poll_card_shows_counts():
     assert sections[0]["header"] == "Mon · 6 voted"
     buttons = sections[0]["widgets"][0]["buttonList"]["buttons"]
     assert [b["text"] for b in buttons] == ["15:00 (4)", "16:00 (2)"]
+
+
+def test_build_confirmation_card_has_yes_no():
+    card = build_confirmation_card(3, "https://x/hook")
+    assert "Thursday" in card["cardsV2"][0]["card"]["header"]["title"]
+    buttons = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"]
+    assert len(buttons) == 2
+    no_params = {p["key"]: p["value"] for p in buttons[1]["onClick"]["action"]["parameters"]}
+    assert no_params["method"] == "confirm_attendance"
+    assert no_params["answer"] == "no"
+    assert no_params["day"] == "3"

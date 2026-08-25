@@ -6,6 +6,7 @@
 
 Чистые функции в начале (тестируются юнитами), БД-функции ниже.
 """
+import asyncio
 import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Дни недели по индексу (0=Пн .. 6=Вс), совпадает с datetime.weekday().
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 ALLOWED_SUBMIT_TIMES = frozenset({"15:00", "16:00", "17:00"})
 
@@ -89,6 +91,43 @@ def build_weekly_poll_card(
                 "header": {"title": "When can you meet this week? 🗓️",
                            "subtitle": "Pick ONE day and time"},
                 "sections": sections,
+            },
+        }]
+    }
+
+
+def build_confirmation_card(day_of_week: int, action_url: str) -> dict:
+    """Карточка подтверждения явки в личке: «Will you come on X?» с Yes/No."""
+    day_name = DAY_FULL[day_of_week]
+    return {
+        "cardsV2": [{
+            "cardId": "attendanceConfirm",
+            "card": {
+                "header": {"title": f"Will you come on {day_name}?", "subtitle": "Meetup confirmation"},
+                "sections": [{"widgets": [{"buttonList": {"buttons": [
+                    {
+                        "text": "Yes ✅",
+                        "onClick": {"action": {
+                            "function": action_url,
+                            "parameters": [
+                                {"key": "method", "value": "confirm_attendance"},
+                                {"key": "day", "value": str(day_of_week)},
+                                {"key": "answer", "value": "yes"},
+                            ],
+                        }},
+                    },
+                    {
+                        "text": "No ❌",
+                        "onClick": {"action": {
+                            "function": action_url,
+                            "parameters": [
+                                {"key": "method", "value": "confirm_attendance"},
+                                {"key": "day", "value": str(day_of_week)},
+                                {"key": "answer", "value": "no"},
+                            ],
+                        }},
+                    },
+                ]}}]}],
             },
         }]
     }
@@ -190,10 +229,18 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
         db.add(response)
     await db.flush()  # response.id заполнен до вставки PollVote
 
-    # один слот на человека: убрать старые голоса в этом опросе
+    # при голосовании за день снимаем пометку «отказался» (если была)
+    declined = dict(response.declined_days or {})
+    if str(day) in declined:
+        declined.pop(str(day))
+        response.declined_days = declined
+
+    # один слот на день: убрать только старые голоса за этот же день (другие дни сохраняем)
     await db.execute(delete(PollVote).where(
         PollVote.profile_id == profile.id,
-        PollVote.poll_slot_id.in_(select(PollSlot.id).where(PollSlot.poll_id == poll.id)),
+        PollVote.poll_slot_id.in_(
+            select(PollSlot.id).where(PollSlot.poll_id == poll.id, PollSlot.day_of_week == day)
+        ),
     ))
 
     slot = (
@@ -225,6 +272,7 @@ async def poll_counts(db: AsyncSession, poll_id: int) -> tuple[list[int], list[s
             select(PollSlot)
             .where(PollSlot.poll_id == poll_id)
             .order_by(PollSlot.day_of_week, PollSlot.slot_start)
+            .execution_options(populate_existing=True)  # свежие votes_count (триггер меняет их в обход сессии)
         )
     ).scalars().all()
     days = sorted({s.day_of_week for s in slots})
@@ -234,6 +282,44 @@ async def poll_counts(db: AsyncSession, poll_id: int) -> tuple[list[int], list[s
         for s in slots
     }
     return days, times, counts
+
+
+async def send_weekly_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
+    """Отправить карточку опроса в группу (или обновить существующую), запомнить message_name."""
+    space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+    if not space_id:
+        return
+    days, times, counts = await poll_counts(db, poll.id)
+    card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
+    from app.services.chat_sender import patch_message, send_message as send_space_message
+
+    # уже есть карточка — обновляем на месте, чтобы не плодить дубликаты
+    if poll.card_message_name:
+        try:
+            await asyncio.to_thread(patch_message, poll.card_message_name, cards_v2=card["cardsV2"])
+            return
+        except Exception:
+            logger.exception("poll_card_patch_failed poll=%s", poll.id)
+
+    resp = send_space_message(
+        space_id, text="When can you meet this week? 🗓️", cards_v2=card["cardsV2"],
+    )
+    poll.card_message_name = resp.get("name", "")
+    await db.commit()
+
+
+async def refresh_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
+    """Обновить карточку опроса в группе актуальными счётчиками (messages.patch)."""
+    if not poll.card_message_name:
+        return
+    days, times, counts = await poll_counts(db, poll.id)
+    card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
+    from app.services.chat_sender import patch_message
+
+    try:
+        await asyncio.to_thread(patch_message, poll.card_message_name, cards_v2=card["cardsV2"])
+    except Exception:
+        logger.exception("poll_card_refresh_failed poll=%s", poll.id)
 
 
 async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> tuple[MeetingInstance, str] | None:
@@ -286,3 +372,82 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
     time_str = slot_start.strftime("%H:%M")
     logger.info("day_quorum_reached poll=%s day=%s time=%s", poll.id, day_of_week, time_str)
     return meeting, time_str
+
+
+async def decline_day(db: AsyncSession, profile: Profile, day_of_week: int) -> bool:
+    """Отказаться от дня: убрать голос и запомнить время (для возможного возврата)."""
+    poll = await active_weekly_poll(db)
+    if poll is None:
+        return False
+    slot = (await db.execute(
+        select(PollSlot)
+        .join(PollVote, PollVote.poll_slot_id == PollSlot.id)
+        .where(PollVote.profile_id == profile.id, PollSlot.poll_id == poll.id, PollSlot.day_of_week == day_of_week)
+    )).scalars().first()
+    if slot is None:
+        return False
+    time_str = slot.slot_start.strftime("%H:%M")
+
+    await db.execute(delete(PollVote).where(
+        PollVote.profile_id == profile.id,
+        PollVote.poll_slot_id.in_(
+            select(PollSlot.id).where(PollSlot.poll_id == poll.id, PollSlot.day_of_week == day_of_week)
+        ),
+    ))
+
+    response = (await db.execute(select(PollResponse).where(
+        PollResponse.profile_id == profile.id, PollResponse.poll_id == poll.id
+    ))).scalar_one_or_none()
+    if response is None:
+        response = PollResponse(profile_id=profile.id, poll_id=poll.id, status="responded")
+        db.add(response)
+        await db.flush()
+    declined = dict(response.declined_days or {})
+    declined[str(day_of_week)] = time_str
+    response.declined_days = declined
+    await db.commit()
+    await refresh_poll_card(db, poll)
+    return True
+
+
+async def restore_day(db: AsyncSession, profile: Profile, day_of_week: int) -> bool:
+    """Вернуть голос за день, если ранее от него отказался. True, если голос восстановлен."""
+    poll = await active_weekly_poll(db)
+    if poll is None:
+        return False
+    response = (await db.execute(select(PollResponse).where(
+        PollResponse.profile_id == profile.id, PollResponse.poll_id == poll.id
+    ))).scalar_one_or_none()
+    if response is None:
+        return False
+    declined = dict(response.declined_days or {})
+    time_str = declined.pop(str(day_of_week), None)
+    if time_str is None:
+        return False
+    slot = (await db.execute(select(PollSlot).where(
+        PollSlot.poll_id == poll.id,
+        PollSlot.day_of_week == day_of_week,
+        PollSlot.slot_start == slot_datetime(time_str),
+    ))).scalar_one_or_none()
+    if slot is None:
+        response.declined_days = declined
+        await db.commit()
+        return False
+    db.add(PollVote(profile_id=profile.id, poll_slot_id=slot.id, poll_response_id=response.id))
+    response.declined_days = declined
+    response.status = "responded"
+    await db.commit()
+    await refresh_poll_card(db, poll)
+    return True
+
+
+async def day_voter_profiles(db: AsyncSession, poll_id: int, day_of_week: int) -> list[Profile]:
+    """Профили, проголосовавшие за указанный день (без дублей)."""
+    rows = await db.execute(
+        select(Profile)
+        .join(PollVote, PollVote.profile_id == Profile.id)
+        .join(PollSlot, PollSlot.id == PollVote.poll_slot_id)
+        .where(PollSlot.poll_id == poll_id, PollSlot.day_of_week == day_of_week)
+        .distinct()
+    )
+    return list(rows.scalars().all())

@@ -92,6 +92,8 @@ class DailyPoll(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     poll_date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
     voting_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Имя сообщения карточки опроса в группе (для обновления счётчиков на месте)
+    card_message_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -187,6 +189,10 @@ class PollResponse(Base):
     )
     last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Дни, от которых участник отказался при подтверждении явки: {"1": "15:00"}
+    declined_days: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
+    )
 
 
 class PollVote(Base):
