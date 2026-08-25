@@ -94,6 +94,10 @@ async def handle_time_finalized(
             _close_checkin, "date", run_date=close_at,
             id=checkin_job_ids(str(instance_id))["close"], replace_existing=True,
         )
+        # Бриф встречи (тема + тезисы + новости) — отдельный модуль app/services/briefing
+        from app.services.briefing import schedule_briefing_for_meeting
+
+        await schedule_briefing_for_meeting(db, instance_id, scheduled_start)
 
     logger.info("time_finalized_handled instance=%s", instance_id)
     return {"invited": 0}

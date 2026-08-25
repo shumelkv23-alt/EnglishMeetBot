@@ -25,8 +25,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting up application in {settings.app_env} mode...")
     await init_scheduler()
     from app.services.reminders import restore_reminders_on_startup
+    from app.services.briefing import restore_briefings_on_startup
 
     await restore_reminders_on_startup()
+    await restore_briefings_on_startup()
     yield
     shutdown_scheduler()
     logger.info("Shutting down application...")
