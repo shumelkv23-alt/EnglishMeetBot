@@ -12,9 +12,14 @@ from app.models import Answer, Profile
 from app.schemas import MessagePayload
 from app.services.form_parsing import parse_form_inputs
 from app.services.llm_questions import generate_personal_question
+from app.services.onboarding import ONBOARDING_QUESTION
+from app.services.onboarding_answers import QUESTIONS as ONBOARDING_QUESTIONS
 from app.services.question_bank import bank_questions_for
 
 logger = logging.getLogger(__name__)
+
+# Ответы на анкету онбординга не считаем «ответами на вопросы недели».
+_ONBOARDING_QUESTIONS = frozenset([ONBOARDING_QUESTION, *ONBOARDING_QUESTIONS.values()])
 
 
 def current_week_start() -> date:
@@ -123,7 +128,9 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         answered = (
             await db.execute(
                 select(func.count()).select_from(Answer).where(
-                    Answer.profile_id == p.id, Answer.week_start == week_start,
+                    Answer.profile_id == p.id,
+                    Answer.week_start == week_start,
+                    Answer.question_text.notin_(_ONBOARDING_QUESTIONS),
                 )
             )
         ).scalar_one()
