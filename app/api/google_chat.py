@@ -731,7 +731,7 @@ async def _submit_weekly_poll(chat_data: dict, common: dict) -> dict:
 
 
 async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | None = None) -> JSONResponse:
-    """Обработать клик по кнопке ежедневного опроса.
+    """Обработать клик по кнопке недельного опроса (день+время).
 
     При успехе и наличии message_name — обновляет карточку счётчиками
     (updateMessageAction), иначе/при закрытии — текст (createMessageAction).
@@ -741,7 +741,10 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
     if isinstance(params, list):
         params = {p.get("key"): p.get("value") for p in params if isinstance(p, dict)}
     if not form_inputs and isinstance(params, dict) and params.get("time"):
-        form_inputs = {"time": {"stringInputs": {"value": [str(params["time"])]}}}
+        form_inputs = {
+            "day": {"stringInputs": {"value": [str(params.get("day", ""))]}},
+            "time": {"stringInputs": {"value": [str(params["time"])]}},
+        }
     user = chat_data.get("user", {})
     workspace_user_id = user.get("name", "")
     result = {"ok": False, "reason": "no_user"}
@@ -756,22 +759,22 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
                     chat_space_id=_dm_space_name(space),
                 )
                 from app.services.weekly_poll import (
-                    active_daily_poll, build_daily_poll_card, poll_counts, submit_poll, today,
+                    active_weekly_poll, build_weekly_poll_card, poll_counts, submit_poll,
                 )
                 result = await submit_poll(db, profile, form_inputs)
                 if result.get("ok") and message_name:
                     try:
-                        poll = await active_daily_poll(db, today())
+                        poll = await active_weekly_poll(db)
                         if poll is not None:
-                            slots, counts = await poll_counts(db, poll.id)
-                            updated_card = build_daily_poll_card(
-                                slots, settings.chat_app_audience, counts,
+                            days, times, counts = await poll_counts(db, poll.id)
+                            updated_card = build_weekly_poll_card(
+                                days, times, settings.chat_app_audience, counts,
                             )
                     except Exception:
                         # голос уже записан — карточку просто не обновим
-                        logger.exception("daily_poll_card_build_failed")
+                        logger.exception("weekly_poll_card_build_failed")
         except Exception:
-            logger.exception("daily_poll_submit_failed")
+            logger.exception("weekly_poll_submit_failed")
             result = {"ok": False, "reason": "db_error"}
     if result.get("ok"):
         if updated_card is not None and message_name:

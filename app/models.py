@@ -120,6 +120,10 @@ class PollSlot(Base):
     poll_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("daily_polls.id"), nullable=False
     )
+    # День недели слота: 0=Пн .. 6=Вс (для недельного опроса день+время)
+    day_of_week: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     slot_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     location: Mapped[str] = mapped_column(String(255), nullable=False)

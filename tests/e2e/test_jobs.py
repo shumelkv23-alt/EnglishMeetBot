@@ -13,11 +13,11 @@ from app.models import Attendance, MeetingInstance, PollSlot
 from app.services.checkin import submit_checkin
 from app.services.invites import handle_time_finalized
 from app.services.onboarding import get_or_create_profile
-from app.services.weekly_poll import finalize_daily_poll, submit_poll
+from app.services.weekly_poll import finalize_day, submit_poll
 
 pytestmark = pytest.mark.e2e
 
-FORM_1500 = {"time": {"stringInputs": {"value": ["15:00"]}}}
+FORM_1500 = {"day": {"stringInputs": {"value": ["0"]}}, "time": {"stringInputs": {"value": ["15:00"]}}}
 
 
 async def _first_slot(db, poll) -> PollSlot:
@@ -46,14 +46,15 @@ async def test_finalize_creates_meeting_on_quorum(db, today_poll):
         p = await get_or_create_profile(db, f"users/e2e_fin_{i}")
         await submit_poll(db, p, FORM_1500)
 
-    outcome = await finalize_daily_poll(db, today_poll)
-    assert "15:00" in outcome["result"]["meetings"]
+    result = await finalize_day(db, today_poll, 0)
+    assert result is not None
+    _, time_str = result
+    assert time_str == "15:00"
 
     meetings = (
         await db.execute(select(MeetingInstance).where(MeetingInstance.poll_id == today_poll.id))
     ).scalars().all()
     assert len(meetings) == 1
-    assert today_poll.status == "finalized"
     m = meetings[0]
     assert m.scheduled_end - m.scheduled_start == timedelta(minutes=60)
 
@@ -62,14 +63,13 @@ async def test_finalize_cancels_without_quorum(db, today_poll):
     p = await get_or_create_profile(db, "users/e2e_cancel")
     await submit_poll(db, p, FORM_1500)  # 1 голос < кворума 3
 
-    outcome = await finalize_daily_poll(db, today_poll)
-    assert outcome["result"]["cancelled"] is True
+    result = await finalize_day(db, today_poll, 0)
+    assert result is None
 
     meetings = (
         await db.execute(select(MeetingInstance).where(MeetingInstance.poll_id == today_poll.id))
     ).scalars().all()
     assert len(meetings) == 0
-    assert today_poll.status == "cancelled"
 
 
 async def test_handle_time_finalized_posts_to_space(db, today_poll, monkeypatch):
@@ -101,7 +101,7 @@ async def test_send_reminder_posts_to_space(db, today_poll, monkeypatch):
     await _send_reminder(str(meeting.id))
     assert len(sent) == 1
     _, text = sent[0]
-    assert "Через час" in text
+    assert "in an hour" in text
 
 
 async def test_checkin_within_window_marks_present(db, today_poll):
@@ -145,15 +145,13 @@ async def test_poll_counts_reflects_votes(db, today_poll):
     from app.services.weekly_poll import poll_counts
 
     p = await get_or_create_profile(db, "users/e2e_counts")
-    await submit_poll(db, p, FORM_1500)  # голос за 15:00
-    na = await get_or_create_profile(db, "users/e2e_counts_na")
-    await submit_poll(db, na, {"time": {"stringInputs": {"value": ["not_available"]}}})
+    await submit_poll(db, p, FORM_1500)  # голос за Пн 15:00
 
-    slots, counts = await poll_counts(db, today_poll.id)
-    assert slots == ["15:00", "16:00", "17:00"]
-    assert counts["15:00"] == 1
-    assert counts["16:00"] == 0
-    assert counts["not_available"] == 1
+    days, times, counts = await poll_counts(db, today_poll.id)
+    assert days == [0, 1, 2, 3, 4, 5, 6]
+    assert times == ["15:00", "16:00", "17:00"]
+    assert counts[(0, "15:00")] == 1
+    assert counts[(0, "16:00")] == 0
 
 
 async def test_inactivity_reminder_job_calls_remind_inactive(db, monkeypatch):

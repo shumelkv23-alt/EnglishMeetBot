@@ -30,7 +30,7 @@ from app.models import (
     PollVote,
     Profile,
 )
-from app.services.weekly_poll import slot_datetime
+from app.services.weekly_poll import slot_datetime, week_monday
 
 BASE_URL = os.getenv("E2E_BASE_URL", "http://localhost:8000")
 E2E_PREFIX = "users/e2e_"
@@ -96,38 +96,41 @@ async def db():
 
 @pytest.fixture
 async def today_poll(db):
-    """Сбросить и пересоздать опрос дня: активный DailyPoll на today + 3 слота.
+    """Сбросить и пересоздать недельный опрос: активный DailyPoll на понедельник + 7 дней × 3 слота.
 
     Дедлайн ставим на +2 часа в будущее, чтобы submit_poll не вернул "closed".
     В teardown удаляем созданный опрос и всё, что с ним связано.
     """
     today = datetime.now(timezone.utc).date()
+    monday = week_monday(today)
 
-    # Сбрасываем существующий опрос дня (любого статуса).
+    # Сбрасываем существующий опрос недели (любого статуса).
     old_ids = (
-        await db.execute(select(DailyPoll.id).where(DailyPoll.poll_date == today))
+        await db.execute(select(DailyPoll.id).where(DailyPoll.poll_date == monday))
     ).scalars().all()
     if old_ids:
         await _delete_polls(db, old_ids)
         await db.commit()
 
     poll = DailyPoll(
-        poll_date=today,
+        poll_date=monday,
         voting_deadline=datetime.now(timezone.utc) + timedelta(hours=2),
         status="active",
     )
     db.add(poll)
     await db.flush()
-    for t in ("15:00", "16:00", "17:00"):
-        start = slot_datetime(t)
-        db.add(
-            PollSlot(
-                poll_id=poll.id,
-                slot_start=start,
-                slot_end=start + timedelta(minutes=60),
-                location="Онлайн (Meet)",
+    for dow in range(7):
+        for t in ("15:00", "16:00", "17:00"):
+            start = slot_datetime(t)
+            db.add(
+                PollSlot(
+                    poll_id=poll.id,
+                    day_of_week=dow,
+                    slot_start=start,
+                    slot_end=start + timedelta(minutes=60),
+                    location="Онлайн (Meet)",
+                )
             )
-        )
     await db.commit()
     await db.refresh(poll)
 

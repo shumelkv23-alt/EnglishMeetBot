@@ -17,66 +17,53 @@ logger = logging.getLogger(__name__)
 scheduler: AsyncIOScheduler | None = None
 
 
-async def _run_daily_poll() -> None:
-    """Джоб 9:00 — создать опрос дня и отправить карточку в группу."""
+async def _run_weekly_poll() -> None:
+    """Джоб в понедельник — создать опрос недели (день+время) и отправить карточку в группу."""
     from app.services.weekly_poll import (
-        build_daily_poll_card,
-        ensure_daily_poll,
+        build_weekly_poll_card,
+        ensure_weekly_poll,
         get_or_create_config,
+        poll_counts,
     )
 
     async with AsyncSessionLocal() as db:
-        poll = await ensure_daily_poll(db)
+        poll = await ensure_weekly_poll(db)
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
-        if poll is not None and space_id:
-            slots = ["15:00", "16:00", "17:00"]
-            card = build_daily_poll_card(slots, get_settings().chat_app_audience)
+        if space_id:
+            days, times, counts = await poll_counts(db, poll.id)
+            card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
             send_space_message(
                 space_id,
-                text="Кто сегодня и во сколько? 🗓️",
+                text="When can you meet this week? 🗓️",
                 cards_v2=card.get("cardsV2"),
             )
-            logger.info("daily_poll_job sent poll=%s space=%s", poll.id, space_id)
+            logger.info("weekly_poll_job sent poll=%s space=%s", poll.id, space_id)
         else:
-            logger.info("daily_poll_job skipped poll=%s space_id=%r", poll.id if poll else None, space_id)
+            logger.info("weekly_poll_job skipped poll=%s space_id=%r", poll.id, space_id)
 
 
-async def _finalize_daily_poll() -> None:
-    """Джоб финализации: подвести итог, создать встречи, запустить ENG-7."""
-    from sqlalchemy import select
+async def _check_today_quorum() -> None:
+    """Ежедневный джоб — если сегодняшний день набрал квоту, создать встречу и уведомить."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    from app.models import MeetingInstance
     from app.services.invites import handle_time_finalized
-    from app.services.weekly_poll import active_daily_poll, finalize_daily_poll, today
+    from app.services.weekly_poll import DAYS, active_weekly_poll, finalize_day
 
     async with AsyncSessionLocal() as db:
-        poll = await active_daily_poll(db, today())
+        poll = await active_weekly_poll(db)
         if poll is None:
-            logger.info("daily_finalize_job no_active_poll")
+            logger.info("quorum_check_job no_active_poll")
             return
-        outcome = await finalize_daily_poll(db, poll)
-        result = outcome["result"]
-        space_id = outcome.get("space_id") or ""
-        if not space_id:
-            logger.info("daily_finalize_job done poll=%s status=%s (space_id не задан)",
-                        poll.id, poll.status)
+        dow = datetime.now(ZoneInfo(get_settings().app_timezone)).weekday()
+        result = await finalize_day(db, poll, dow)
+        if result is None:
             return
-        if result["meetings"]:
-            meetings = (
-                await db.execute(select(MeetingInstance).where(MeetingInstance.poll_id == poll.id))
-            ).scalars().all()
-            for m in meetings:
-                await handle_time_finalized(
-                    db, m.id,
-                    m.scheduled_start.strftime("%a"),
-                    m.scheduled_start.strftime("%H:%M"),
-                    scheduled_start=m.scheduled_start,
-                )
-            for choice, target in result["suggest_to"].items():
-                send_space_message(space_id, text=f"Тем, кто выбрал {choice} — встреча также в {target}")
-        else:
-            send_space_message(space_id, text="Сегодня встреча не набирается — отмена")
-        logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
+        meeting, time_str = result
+        await handle_time_finalized(
+            db, meeting.id, DAYS[dow], time_str, scheduled_start=meeting.scheduled_start,
+        )
+        logger.info("quorum_check_job notified day=%s time=%s", DAYS[dow], time_str)
 
 
 async def _run_weekly_questions() -> None:
@@ -134,28 +121,28 @@ async def init_scheduler() -> None:
     async with AsyncSessionLocal() as db:
         run_h = int((await get_or_create_config(db, "poll_run_hour", 9)).value or 9)
         run_m = int((await get_or_create_config(db, "poll_run_minute", 0)).value or 0)
-        fin_h = int((await get_or_create_config(db, "poll_finalize_hour", 14)).value or 14)
-        fin_m = int((await get_or_create_config(db, "poll_finalize_minute", 5)).value or 5)
+        check_h = int((await get_or_create_config(db, "quorum_check_hour", 10)).value or 10)
         weekly_day = str((await get_or_create_config(db, "weekly_poll_day", "sun")).value or "sun")
         weekly_hour = int((await get_or_create_config(db, "weekly_poll_hour", 11)).value or 11)
         rem_h = int((await get_or_create_config(db, "inactivity_reminder_hour", 11)).value or 11)
 
     scheduler = AsyncIOScheduler(timezone=get_settings().app_timezone)
     scheduler.add_job(
-        _run_daily_poll,
+        _run_weekly_poll,
         "cron",
+        day_of_week="mon",
         hour=run_h,
         minute=run_m,
-        id="daily-poll",
+        id="weekly-poll",
         replace_existing=True,
         misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _finalize_daily_poll,
+        _check_today_quorum,
         "cron",
-        hour=fin_h,
-        minute=fin_m,
-        id="daily-finalize",
+        hour=check_h,
+        minute=0,
+        id="daily-quorum-check",
         replace_existing=True,
         misfire_grace_time=3600,
     )

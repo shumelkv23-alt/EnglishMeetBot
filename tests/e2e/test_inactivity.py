@@ -71,7 +71,7 @@ async def test_submit_poll_touches_activity(db, today_poll):
     p.last_activity_at = None
     await db.commit()
 
-    await submit_poll(db, p, {"time": {"stringInputs": {"value": ["15:00"]}}})
+    await submit_poll(db, p, {"day": {"stringInputs": {"value": ["0"]}}, "time": {"stringInputs": {"value": ["15:00"]}}})
 
     await db.refresh(p)
     assert p.last_activity_at is not None

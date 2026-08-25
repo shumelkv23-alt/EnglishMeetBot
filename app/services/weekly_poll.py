@@ -1,117 +1,100 @@
-"""Ежедневный опрос: карточка, сабмит, создание опроса дня, финализация.
+"""Недельный опрос: карточка «день недели + время», сабмит, проверка квоты дня.
 
-Чистые функции в начале файла (тестируются юнитами), БД-функции ниже
-(проверяются интеграционными скриптами на поднятом Postgres).
+Один опрос на неделю (создаётся в понедельник): каждый участник голосует за
+ОДИН слот (день + время), счётчики видны всем. Ежедневный джоб проверяет,
+набрал ли сегодняшний день квоту — если да, создаёт встречу и шлёт уведомление.
+
+Чистые функции в начале (тестируются юнитами), БД-функции ниже.
 """
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import get_settings
+from app.models import Config, DailyPoll, MeetingInstance, PollResponse, PollSlot, PollVote, Profile
 from app.services.form_parsing import parse_form_inputs
 
 logger = logging.getLogger(__name__)
 
-
-def _normalize_submit_time(form_inputs: dict) -> str:
-    """Одно выбранное время из formInputs: "15:00" / "not_available" или ""."""
-    vals = parse_form_inputs(form_inputs).get("time", [])
-    return vals[0] if vals else ""
-
+# Дни недели по индексу (0=Пн .. 6=Вс), совпадает с datetime.weekday().
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 ALLOWED_SUBMIT_TIMES = frozenset({"15:00", "16:00", "17:00"})
 
 
+def parse_day(raw: str) -> int:
+    """'Mon' / '0' → 0 (Пн); невалидное → -1."""
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.isdigit():
+            d = int(s)
+            return d if 0 <= d <= 6 else -1
+        for i, name in enumerate(DAYS):
+            if s.lower() == name.lower():
+                return i
+    return -1
+
+
+def _normalize_submit(form_inputs: dict) -> tuple[int, str]:
+    """(day_of_week, time) из formInputs; day по ключу "day", time по "time"."""
+    vals = parse_form_inputs(form_inputs)
+    day_raw = (vals.get("day") or [""])[0]
+    time_raw = (vals.get("time") or [""])[0]
+    return parse_day(day_raw), time_raw
+
+
 def _is_valid_submit_time(choice: str) -> bool:
-    """Допустимое значение сабмита: "not_available" или слот из ALLOWED_SUBMIT_TIMES.
-
-    Защищает slot_datetime от невалидного входа ("banana", "15") — валидация
-    до вызова, невалидное время в submit_poll превращается в reason="empty".
-    """
-    return choice == "not_available" or choice in ALLOWED_SUBMIT_TIMES
+    """Допустимое значение времени (слот из ALLOWED_SUBMIT_TIMES)."""
+    return choice in ALLOWED_SUBMIT_TIMES
 
 
-def resolve_day_result(votes: dict[str, int], quorum: int) -> dict:
-    """Итог дня: какие времена набрали порог, кому предложить другое время.
+def build_weekly_poll_card(
+    days: list[int], times: list[str], action_url: str, counts: dict[tuple[int, str], int] | None = None,
+) -> dict:
+    """Карточка недельного опроса: по секции на день, кнопки времени со счётчиками.
 
-    votes — {"15:00": N, ...}; quorum — минимальное число голосов.
-    Возвращает {"meetings": [...], "suggest_to": {...}, "cancelled": bool}.
-    """
-    meetings = [t for t, c in votes.items() if c >= quorum]
-    if not meetings:
-        return {"meetings": [], "suggest_to": {}, "cancelled": True}
-    # самое популярное из состоявшихся — для предложения недобравшим
-    best = max(meetings, key=lambda t: votes[t])
-    suggest_to = {
-        t: best
-        for t, c in votes.items()
-        if 0 < c < quorum
-    }
-    return {"meetings": sorted(meetings), "suggest_to": suggest_to, "cancelled": False}
-
-
-def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, int] | None = None) -> dict:
-    """Карточка ежедневного опроса: счётчики голосов + кнопки.
-
-    counts — {"15:00": N, ..., "not_available": N}; None → все нули.
+    counts — {(day_of_week, "HH:MM"): N}; None → все нули.
     """
     counts = counts or {}
-    lines = [f"{t} — {counts.get(t, 0)}" for t in slots]
-    lines.append(f"Can't make it — {counts.get('not_available', 0)}")
-
-    buttons = []
-    for t in slots:
-        buttons.append({
-            "text": t,
-            "onClick": {"action": {
-                "function": action_url or "submit_daily_poll",
-                "parameters": [
-                    {"key": "method", "value": "submit_daily_poll"},
-                    {"key": "time", "value": t},
-                ],
-            }},
+    sections = []
+    for day in days:
+        day_name = DAYS[day]
+        total = sum(counts.get((day, t), 0) for t in times)
+        buttons = []
+        for t in times:
+            c = counts.get((day, t), 0)
+            buttons.append({
+                "text": f"{t} ({c})",
+                "onClick": {"action": {
+                    "function": action_url or "submit_daily_poll",
+                    "parameters": [
+                        {"key": "method", "value": "submit_daily_poll"},
+                        {"key": "day", "value": str(day)},
+                        {"key": "time", "value": t},
+                    ],
+                }},
+            })
+        sections.append({
+            "header": f"{day_name} · {total} voted",
+            "widgets": [{"buttonList": {"buttons": buttons}}],
         })
-    buttons.append({
-        "text": "Can't make it today",
-        "onClick": {"action": {
-            "function": action_url or "submit_daily_poll",
-            "parameters": [
-                {"key": "method", "value": "submit_daily_poll"},
-                {"key": "time", "value": "not_available"},
-            ],
-        }},
-    })
     return {
         "cardsV2": [{
-            "cardId": "dailyPoll",
+            "cardId": "weeklyPoll",
             "card": {
-                "header": {"title": "Who's in today and at what time? 🗓️",
-                           "subtitle": "Pick a time or 'can't make it'"},
-                "sections": [
-                    {"widgets": [{"textParagraph": {"text": "\n".join(lines)}}]},
-                    {"widgets": [{"buttonList": {"buttons": buttons}}]},
-                ],
+                "header": {"title": "When can you meet this week? 🗓️",
+                           "subtitle": "Pick ONE day and time"},
+                "sections": sections,
             },
         }]
     }
 
 
 # --- БД-часть (интеграционная) ---
-from datetime import date, timezone  # noqa: E402
-
-from sqlalchemy import delete, func, select  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
-
-from app.models import (  # noqa: E402
-    Config,
-    DailyPoll,
-    MeetingInstance,
-    PollResponse,
-    PollSlot,
-    PollVote,
-    Profile,
-)
 
 
 async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Config:
@@ -124,9 +107,10 @@ async def get_or_create_config(db: AsyncSession, key: str, fallback_value) -> Co
     return cfg
 
 
-def today() -> date:
-    """Текущий день в таймзоне приложения — дата ежедневного опроса."""
-    return datetime.now(ZoneInfo(get_settings().app_timezone)).date()
+def week_monday(day: date | None = None) -> date:
+    """Понедельник текущей недели (в таймзоне приложения)."""
+    d = day or datetime.now(ZoneInfo(get_settings().app_timezone)).date()
+    return d - timedelta(days=d.weekday())
 
 
 def slot_datetime(time_str: str) -> datetime:
@@ -135,95 +119,56 @@ def slot_datetime(time_str: str) -> datetime:
     return datetime(2000, 1, 1, int(h), int(m), tzinfo=timezone.utc)
 
 
-async def active_daily_poll(db: AsyncSession, day: date) -> DailyPoll | None:
-    """Активный опрос дня (status='active') или None."""
+async def active_weekly_poll(db: AsyncSession) -> DailyPoll | None:
+    """Активный опрос текущей недели (poll_date = понедельник, status='active')."""
     return (
         await db.execute(
             select(DailyPoll).where(
-                DailyPoll.poll_date == day,
+                DailyPoll.poll_date == week_monday(),
                 DailyPoll.status == "active",
             )
         )
     ).scalar_one_or_none()
 
 
-async def ensure_daily_poll(db: AsyncSession) -> DailyPoll | None:
-    """Активный опрос дня; если нет — создать опрос и слоты из config['daily_slots'].
-
-    Слоты создаются с slot_start = slot_datetime(t) (carrier-дата 2000-01-01) —
-    так submit_poll матчит голос по slot_start == slot_datetime(choice).
-    """
-    day = today()
-    poll = await active_daily_poll(db, day)
+async def ensure_weekly_poll(db: AsyncSession) -> DailyPoll:
+    """Активный опрос недели; если нет — создать опрос и слоты 7 дней × время."""
+    poll = await active_weekly_poll(db)
     if poll is not None:
         return poll
 
     raw_slots = (await get_or_create_config(db, "daily_slots", ["15:00", "16:00", "17:00"])).value
-    if isinstance(raw_slots, str):  # запасной вариант: конфиг хранился как JSON-строка
+    if isinstance(raw_slots, str):
         raw_slots = json.loads(raw_slots)
-    slot_times = [t for t in raw_slots if isinstance(t, str)]
+    times = [t for t in raw_slots if isinstance(t, str) and _is_valid_submit_time(t)]
 
-    deadline_h = int((await get_or_create_config(db, "poll_deadline_hour", 14)).value or 14)
-    deadline_m = int((await get_or_create_config(db, "poll_deadline_minute", 0)).value or 0)
-
+    monday = week_monday()
+    sunday = monday + timedelta(days=6)
     poll = DailyPoll(
-        poll_date=day,
-        voting_deadline=datetime(day.year, day.month, day.day, deadline_h, deadline_m, tzinfo=ZoneInfo(get_settings().app_timezone)),
+        poll_date=monday,
+        voting_deadline=datetime(sunday.year, sunday.month, sunday.day, 23, 59, tzinfo=ZoneInfo(get_settings().app_timezone)),
         status="active",
     )
     db.add(poll)
     await db.flush()
-    for t in slot_times:
-        st = slot_datetime(t)
-        db.add(PollSlot(
-            poll_id=poll.id,
-            slot_start=st,
-            slot_end=st + timedelta(minutes=60),
-            location="Online (Meet)",
-        ))
+    for dow in range(7):
+        for t in times:
+            st = slot_datetime(t)
+            db.add(PollSlot(
+                poll_id=poll.id,
+                day_of_week=dow,
+                slot_start=st,
+                slot_end=st + timedelta(minutes=60),
+                location="Online (Meet)",
+            ))
     await db.commit()
-    logger.info("daily_poll_created id=%s date=%s slots=%s", poll.id, day, len(slot_times))
+    logger.info("weekly_poll_created id=%s week=%s times=%s", poll.id, monday, times)
     return poll
 
 
-async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
-    """Подвести итог дня: создать встречи для времён, набравших порог.
-
-    Возвращает {"result": resolve_day_result(...), "space_id": из config}.
-    """
-    slots = (await db.execute(
-        select(PollSlot).where(PollSlot.poll_id == poll.id)
-    )).scalars().all()
-    votes = {
-        s.slot_start.strftime("%H:%M"): (s.votes_count or 0)
-        for s in slots
-    }
-    quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
-    result = resolve_day_result(votes, quorum)
-
-    duration = int((await get_or_create_config(db, "meeting_duration_minutes", 60)).value or 60)
-    slot_by_time = {s.slot_start.strftime("%H:%M"): s for s in slots}
-    for t in result["meetings"]:
-        slot_time = slot_datetime(t).time()
-        scheduled_start = datetime.combine(poll.poll_date, slot_time, tzinfo=timezone.utc)
-        db.add(MeetingInstance(
-            poll_id=poll.id,
-            selected_slot_id=slot_by_time[t].id,
-            scheduled_start=scheduled_start,
-            scheduled_end=scheduled_start + timedelta(minutes=duration),
-            location="Online (Meet)",
-            status="scheduled",
-        ))
-    poll.status = "finalized" if result["meetings"] else "cancelled"
-    poll.closed_at = datetime.now(timezone.utc)
-    await db.commit()
-    space_id = (await get_or_create_config(db, "space_id", "")).value or ""
-    return {"result": result, "space_id": space_id}
-
-
 async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> dict:
-    """Сабмит ежедневного опроса: одно время на человека или «не могу»."""
-    poll = await active_daily_poll(db, today())
+    """Сабмит недельного опроса: один слот (день+время) на человека."""
+    poll = await active_weekly_poll(db)
     if poll is None:
         return {"ok": False, "reason": "no_poll"}
     deadline = poll.voting_deadline
@@ -232,8 +177,8 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     if deadline < datetime.now(timezone.utc):
         return {"ok": False, "reason": "closed"}
 
-    choice = _normalize_submit_time(form_inputs)
-    if not _is_valid_submit_time(choice):
+    day, choice = _normalize_submit(form_inputs)
+    if day < 0 or not _is_valid_submit_time(choice):
         return {"ok": False, "reason": "empty"}
 
     response = (
@@ -243,28 +188,28 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     if response is None:
         response = PollResponse(profile_id=profile.id, poll_id=poll.id)
         db.add(response)
-    await db.flush()  # response.id заполнен до вставки PollVote (без неявного autoflush)
+    await db.flush()  # response.id заполнен до вставки PollVote
 
-    # одно время на человека: убрать старые голоса
+    # один слот на человека: убрать старые голоса в этом опросе
     await db.execute(delete(PollVote).where(
         PollVote.profile_id == profile.id,
         PollVote.poll_slot_id.in_(select(PollSlot.id).where(PollSlot.poll_id == poll.id)),
     ))
 
-    if choice == "not_available":
-        response.status = "not_available"
-        response.responded_at = None  # CHECK valid_response: responded_at только при responded
-    else:
-        slot = (
-            await db.execute(select(PollSlot).where(
-                PollSlot.poll_id == poll.id, PollSlot.slot_start == slot_datetime(choice)))
-        ).scalar_one_or_none()
-        if slot is None:
-            await db.rollback()  # откат pending: новый response и удалённые старые голоса
-            return {"ok": False, "reason": "empty"}
-        db.add(PollVote(profile_id=profile.id, poll_slot_id=slot.id, poll_response_id=response.id))
-        response.status = "responded"
-        response.responded_at = datetime.now(timezone.utc)
+    slot = (
+        await db.execute(select(PollSlot).where(
+            PollSlot.poll_id == poll.id,
+            PollSlot.day_of_week == day,
+            PollSlot.slot_start == slot_datetime(choice),
+        ))
+    ).scalar_one_or_none()
+    if slot is None:
+        await db.rollback()
+        return {"ok": False, "reason": "empty"}
+
+    db.add(PollVote(profile_id=profile.id, poll_slot_id=slot.id, poll_response_id=response.id))
+    response.status = "responded"
+    response.responded_at = datetime.now(timezone.utc)
 
     from app.services.inactivity import touch_activity
 
@@ -273,19 +218,71 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
     return {"ok": True, "reason": "saved"}
 
 
-async def poll_counts(db: AsyncSession, poll_id: int) -> tuple[list[str], dict[str, int]]:
-    """Счётчики голосов опроса: (слоты по возрастанию, {время -> голоса} + not_available)."""
+async def poll_counts(db: AsyncSession, poll_id: int) -> tuple[list[int], list[str], dict[tuple[int, str], int]]:
+    """(дни, времена, {(день, время): голоса}) для недельного опроса."""
     slots = (
-        await db.execute(select(PollSlot).where(PollSlot.poll_id == poll_id).order_by(PollSlot.slot_start))
-    ).scalars().all()
-    slot_times = [s.slot_start.strftime("%H:%M") for s in slots]
-    counts = {t: (s.votes_count or 0) for t, s in zip(slot_times, slots)}
-    na = (
         await db.execute(
-            select(func.count()).select_from(PollResponse).where(
-                PollResponse.poll_id == poll_id, PollResponse.status == "not_available"
+            select(PollSlot)
+            .where(PollSlot.poll_id == poll_id)
+            .order_by(PollSlot.day_of_week, PollSlot.slot_start)
+        )
+    ).scalars().all()
+    days = sorted({s.day_of_week for s in slots})
+    times = sorted({s.slot_start.strftime("%H:%M") for s in slots})
+    counts = {
+        (s.day_of_week, s.slot_start.strftime("%H:%M")): (s.votes_count or 0)
+        for s in slots
+    }
+    return days, times, counts
+
+
+async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> tuple[MeetingInstance, str] | None:
+    """Подвести день: если набрана квота и встречи ещё нет — создать и вернуть (встреча, время).
+
+    Возвращает None, если квота не набрана или встреча на этот день уже создана.
+    """
+    quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
+    slots = (
+        await db.execute(
+            select(PollSlot).where(PollSlot.poll_id == poll.id, PollSlot.day_of_week == day_of_week)
+        )
+    ).scalars().all()
+    if not slots:
+        return None
+    if sum(s.votes_count or 0 for s in slots) < quorum:
+        return None
+
+    meeting_date = poll.poll_date + timedelta(days=day_of_week)
+    day_start = datetime.combine(meeting_date, time.min, tzinfo=timezone.utc)
+    existing = (
+        await db.execute(
+            select(MeetingInstance).where(
+                MeetingInstance.poll_id == poll.id,
+                MeetingInstance.scheduled_start >= day_start,
+                MeetingInstance.scheduled_start < day_start + timedelta(days=1),
             )
         )
-    ).scalar_one()
-    counts["not_available"] = na
-    return slot_times, counts
+    ).scalars().first()
+    if existing is not None:
+        return None
+
+    best = max(slots, key=lambda s: s.votes_count or 0)
+    duration = int((await get_or_create_config(db, "meeting_duration_minutes", 60)).value or 60)
+    slot_start = best.slot_start
+    if slot_start.tzinfo is None:
+        slot_start = slot_start.replace(tzinfo=timezone.utc)
+    start = datetime.combine(meeting_date, slot_start.time(), tzinfo=timezone.utc)
+    meeting = MeetingInstance(
+        poll_id=poll.id,
+        selected_slot_id=best.id,
+        scheduled_start=start,
+        scheduled_end=start + timedelta(minutes=duration),
+        location="Online (Meet)",
+        status="scheduled",
+    )
+    db.add(meeting)
+    await db.commit()
+    await db.refresh(meeting)
+    time_str = slot_start.strftime("%H:%M")
+    logger.info("day_quorum_reached poll=%s day=%s time=%s", poll.id, day_of_week, time_str)
+    return meeting, time_str
