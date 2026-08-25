@@ -58,6 +58,7 @@ async def test_spy_full_round(client, db):
         )
     text = _resp_text(resp)  # последний голос завершает раунд
     assert "Шпионом был" in text and "Слово:" in text
+    assert "Голосование:" in text  # раскладка голосов в финале
 
     rows = (
         await db.execute(

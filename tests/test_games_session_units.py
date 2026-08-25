@@ -51,3 +51,18 @@ def test_build_join_card_has_two_buttons():
     assert [b["text"] for b in buttons] == ["Я в деле", "Начать"]
     methods = [b["onClick"]["action"]["parameters"][0]["value"] for b in buttons]
     assert methods == ["join_game", "start_game"]
+
+
+def test_build_join_card_shows_player_count_and_roster():
+    card = build_join_card(
+        "https://x/hook", "Шпион", ["users/a", "users/b"], {"users/a": "Alice", "users/b": "Bob"}
+    )
+    text = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "Играют (2)" in text
+    assert "Alice, Bob" in text
+
+
+def test_build_join_card_without_players_has_no_roster():
+    card = build_join_card("https://x/hook", "Шпион")
+    text = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "Играют" not in text

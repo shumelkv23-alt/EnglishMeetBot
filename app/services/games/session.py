@@ -49,8 +49,22 @@ class GameManager:
         cls._sessions.clear()
 
 
-def build_join_card(action_url: str, title: str) -> dict:
-    """Карточка «Кто играет?» с кнопками «Я в деле» (join_game) и «Начать» (start_game)."""
+def build_join_card(
+    action_url: str,
+    title: str,
+    players: list[str] | None = None,
+    names: dict[str, str] | None = None,
+) -> dict:
+    """Карточка «Кто играет?» с кнопками «Я в деле» (join_game) и «Начать» (start_game).
+
+    Если переданы players/names — в тексте карточки показываем текущий состав и счётчик.
+    """
+    players = players or []
+    names = names or {}
+    status = ""
+    if players:
+        roster = ", ".join(names.get(p, p) for p in players)
+        status = f"Играют ({len(players)}): {roster}"
     return {
         "cardsV2": [
             {
@@ -63,6 +77,7 @@ def build_join_card(action_url: str, title: str) -> dict:
                                 {
                                     "textParagraph": {
                                         "text": "Нажми «Я в деле», чтобы присоединиться. Когда все готовы — «Начать»."
+                                        + (f"\n{status}" if status else "")
                                     }
                                 }
                             ]

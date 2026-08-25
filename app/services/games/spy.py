@@ -28,6 +28,14 @@ def assign_roles(players: list[str], rng: random.Random | None = None) -> dict:
     return {"topic": topic, "word": word, "spy": spy}
 
 
+def tally_votes(votes: dict[str, str], players: list[str]) -> dict[str, int]:
+    """Сколько голосов набрал каждый игрок (нули для тех, за кого не голосовали)."""
+    tally = {p: 0 for p in players}
+    for target in votes.values():
+        tally[target] = tally.get(target, 0) + 1
+    return tally
+
+
 def score_spy(spy: str, votes: dict[str, str], players: list[str]) -> dict[str, int]:
     """Очки за раунд: {user_id: positive_points}.
 
@@ -44,8 +52,18 @@ def score_spy(spy: str, votes: dict[str, str], players: list[str]) -> dict[str, 
     return {spy: 3}
 
 
-def build_spy_vote_card(names: dict[str, str], players: list[str], action_url: str) -> dict:
-    """Карточка «Кто шпион?» с кнопкой-именем на каждого игрока."""
+def build_spy_vote_card(
+    names: dict[str, str],
+    players: list[str],
+    action_url: str,
+    votes: dict[str, str] | None = None,
+) -> dict:
+    """Карточка «Кто шпион?» с кнопкой-именем и живой сводкой голосов.
+
+    votes — {голосующий: цель}. Если заданы, карточка показывает счётчик голосов
+    за каждого и список тех, кто ещё не проголосовал.
+    """
+    votes = votes or {}
     buttons = [
         {
             "text": names.get(p, p),
@@ -58,13 +76,22 @@ def build_spy_vote_card(names: dict[str, str], players: list[str], action_url: s
         }
         for p in players
     ]
+    tally = tally_votes(votes, players)
+    status_text = "Голоса: " + ", ".join(f"{names.get(p, p)} — {tally[p]}" for p in players)
+    waiting = [p for p in players if p not in votes]
+    if waiting:
+        status_text += "\nЖдут голоса: " + ", ".join(names.get(p, p) for p in waiting)
+    sections = [
+        {"widgets": [{"textParagraph": {"text": status_text}}]},
+        {"widgets": [{"buttonList": {"buttons": buttons}}]},
+    ]
     return {
         "cardsV2": [
             {
                 "cardId": "spy_vote",
                 "card": {
                     "header": {"title": "Кто шпион? 🕵️", "subtitle": "Голосуй за подозреваемого"},
-                    "sections": [{"widgets": [{"buttonList": {"buttons": buttons}}]}],
+                    "sections": sections,
                 },
             }
         ]
@@ -117,15 +144,19 @@ def start_spy(session, action_url: str) -> dict:
     return build_start_vote_card(topic, action_url)
 
 
-async def vote(db, session, user_id: str, target: str, space_name: str) -> dict | None:
-    """Записать голос «кто шпион»; когда проголосовали все — подсчёт и очки."""
+async def vote(db, session, user_id: str, target: str, space_name: str, action_url: str) -> dict | None:
+    """Записать голос «кто шпион»; когда проголосовали все — подсчёт и очки.
+
+    Возвращает None (раунд уже подсчитан), обновлённую карточку ({"cardsV2"}), пока
+    ждём остальных, или финальный текст ({"text"}).
+    """
     state = session.state
     if state.get("scored"):
         return None  # раунд уже подсчитан
     votes = state["votes"]
     votes[user_id] = target
     if len(votes) < len(session.players):
-        return None  # ждём остальных
+        return build_spy_vote_card(session.names, session.players, action_url, votes)
     state["scored"] = True  # до первого await — чтобы повторный клик не начислил очки дважды
 
     score = score_spy(state["spy"], votes, session.players)
@@ -134,5 +165,13 @@ async def vote(db, session, user_id: str, target: str, space_name: str) -> dict 
         await award_points(db, profile.id, points, "spy")
     GameManager.end(space_name)
     spy_name = session.names.get(state["spy"], state["spy"])
-    lines = [f"{session.names.get(u, u)}: +{p}" for u, p in score.items()]
-    return {"text": f"Шпионом был {spy_name}! Слово: {state['word']}\n\n" + "\n".join(lines)}
+    tally = tally_votes(votes, session.players)
+    vote_lines = [f"{session.names.get(p, p)}: {tally[p]}" for p in session.players]
+    score_lines = [f"{session.names.get(u, u)}: +{p}" for u, p in score.items()]
+    return {
+        "text": (
+            f"Шпионом был {spy_name}! Слово: {state['word']}\n\n"
+            f"Голосование:\n" + "\n".join(vote_lines) + "\n\n"
+            f"Очки:\n" + "\n".join(score_lines)
+        )
+    }
