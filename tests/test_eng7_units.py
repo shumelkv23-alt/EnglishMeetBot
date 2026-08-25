@@ -34,7 +34,7 @@ def test_checkin_window():
 def test_build_checkin_card_has_count():
     card = build_checkin_card("7", action_url="https://example.com/hook", count=3)
     sections = card["cardsV2"][0]["card"]["sections"]
-    assert sections[0]["widgets"][0]["textParagraph"]["text"] == "Отметились: 3"
+    assert sections[0]["widgets"][0]["textParagraph"]["text"] == "Checked in: 3"
 
 
 def test_is_within_window():

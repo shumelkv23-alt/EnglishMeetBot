@@ -75,7 +75,7 @@ def test_build_daily_poll_card_has_four_buttons():
     card = build_daily_poll_card(["15:00", "16:00", "17:00"], action_url="https://x/hook")
     buttons = card["cardsV2"][0]["card"]["sections"][1]["widgets"][0]["buttonList"]["buttons"]
     labels = [b["text"] for b in buttons]
-    assert labels == ["15:00", "16:00", "17:00", "Не могу сегодня"]
+    assert labels == ["15:00", "16:00", "17:00", "Can't make it today"]
     assert all(b["onClick"]["action"]["function"] == "https://x/hook" for b in buttons)
 
 
@@ -89,10 +89,10 @@ def test_build_daily_poll_card_shows_counts():
     counts_text = sections[0]["widgets"][0]["textParagraph"]["text"]
     assert "15:00 — 4" in counts_text
     assert "16:00 — 2" in counts_text
-    assert "Не могу — 0" in counts_text
+    assert "Can't make it — 0" in counts_text
     # кнопки остались во второй секции
     buttons = sections[1]["widgets"][0]["buttonList"]["buttons"]
-    assert [b["text"] for b in buttons] == ["15:00", "16:00", "17:00", "Не могу сегодня"]
+    assert [b["text"] for b in buttons] == ["15:00", "16:00", "17:00", "Can't make it today"]
 
 
 def test_build_daily_poll_card_defaults_to_zero():

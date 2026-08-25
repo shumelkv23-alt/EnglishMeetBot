@@ -58,7 +58,7 @@ def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, i
     """
     counts = counts or {}
     lines = [f"{t} — {counts.get(t, 0)}" for t in slots]
-    lines.append(f"Не могу — {counts.get('not_available', 0)}")
+    lines.append(f"Can't make it — {counts.get('not_available', 0)}")
 
     buttons = []
     for t in slots:
@@ -73,7 +73,7 @@ def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, i
             }},
         })
     buttons.append({
-        "text": "Не могу сегодня",
+        "text": "Can't make it today",
         "onClick": {"action": {
             "function": action_url or "submit_daily_poll",
             "parameters": [
@@ -86,8 +86,8 @@ def build_daily_poll_card(slots: list[str], action_url: str, counts: dict[str, i
         "cardsV2": [{
             "cardId": "dailyPoll",
             "card": {
-                "header": {"title": "Кто сегодня и во сколько? 🗓️",
-                           "subtitle": "Выбери время или «не могу»"},
+                "header": {"title": "Who's in today and at what time? 🗓️",
+                           "subtitle": "Pick a time or 'can't make it'"},
                 "sections": [
                     {"widgets": [{"textParagraph": {"text": "\n".join(lines)}}]},
                     {"widgets": [{"buttonList": {"buttons": buttons}}]},
@@ -179,7 +179,7 @@ async def ensure_daily_poll(db: AsyncSession) -> DailyPoll | None:
             poll_id=poll.id,
             slot_start=st,
             slot_end=st + timedelta(minutes=60),
-            location="Онлайн (Meet)",
+            location="Online (Meet)",
         ))
     await db.commit()
     logger.info("daily_poll_created id=%s date=%s slots=%s", poll.id, day, len(slot_times))
@@ -211,7 +211,7 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
             selected_slot_id=slot_by_time[t].id,
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_start + timedelta(minutes=duration),
-            location="Онлайн (Meet)",
+            location="Online (Meet)",
             status="scheduled",
         ))
     poll.status = "finalized" if result["meetings"] else "cancelled"

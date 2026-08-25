@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 REMINDER_TEXT = (
-    "Привет! 👋 Давно тебя не было. У нас каждый день короткие встречи по английскому — "
-    "заглядывай, если будет минутка. Если формат не зашёл — просто напиши, подстроимся."
+    "Hi! 👋 Haven't seen you in a while. We have short English meetups every day — "
+    "drop by if you have a minute. If the format doesn't suit you — just write, we'll adjust."
 )
 
 

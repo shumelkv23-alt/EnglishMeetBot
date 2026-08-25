@@ -24,6 +24,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -375,7 +376,7 @@ class LeaderboardLedger(Base):
             "profile_id", "meeting_instance_id", "event_type", name="unique_ledger_entry"
         ),
         CheckConstraint(
-            "event_type IN ('attendance', 'answer', 'streak', 'mvp', 'bonus')",
+            "event_type IN ('attendance', 'answer', 'streak', 'mvp', 'bonus', 'game')",
             name="valid_event_type",
         ),
         CheckConstraint("points != 0", name="valid_points"),
@@ -442,4 +443,304 @@ class PollQuestion(Base):
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Game(Base):
+    """Игровая сессия (13. games). Одна запись = одна партия игры-активности.
+
+    Сейчас используется для игры Alias (командная игра в слова).
+    """
+
+    __tablename__ = "games"
+    __table_args__ = (
+        CheckConstraint("status IN ('setup', 'active', 'finished')", name="valid_game_status"),
+        Index("idx_games_space", "space_id"),
+        Index("idx_games_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="setup", server_default=text("'setup'"), nullable=False
+    )
+    target_score: Mapped[int] = mapped_column(
+        Integer, default=15, server_default=text("15"), nullable=False
+    )
+    round_seconds: Mapped[int] = mapped_column(
+        Integer, default=60, server_default=text("60"), nullable=False
+    )
+    # Имя сообщения со счётом в группе (для обновления на месте через messages.patch)
+    scoreboard_message_name: Mapped[str | None] = mapped_column(String(255))
+    # Победитель — просто id команды (без FK, чтобы не плодить циклическую связь)
+    winner_team_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class GameTeam(Base):
+    """Команда в рамках игровой сессии (14. game_teams)."""
+
+    __tablename__ = "game_teams"
+    __table_args__ = (
+        Index("idx_game_teams_game", "game_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("games.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    emoji: Mapped[str] = mapped_column(String(20), nullable=False)
+    score: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class GamePlayer(Base):
+    """Участник игровой сессии и его команда (15. game_players)."""
+
+    __tablename__ = "game_players"
+    __table_args__ = (
+        UniqueConstraint("game_id", "profile_id", name="unique_game_player"),
+        Index("idx_game_players_game", "game_id"),
+        Index("idx_game_players_team", "team_id"),
+        Index("idx_game_players_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("games.id"), nullable=False
+    )
+    team_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("game_teams.id"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class GameRound(Base):
+    """Раунд игры (16. game_rounds). Один раунд = ход одной команды (60 сек)."""
+
+    __tablename__ = "game_rounds"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'time_up', 'confirming', 'confirmed')",
+            name="valid_round_status",
+        ),
+        Index("idx_game_rounds_game", "game_id"),
+        Index("idx_game_rounds_team", "team_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("games.id"), nullable=False
+    )
+    team_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("game_teams.id"), nullable=False
+    )
+    explainer_profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    # Слово, которое сейчас на столе (нужно для «последнего слова» после таймера)
+    current_word: Mapped[str | None] = mapped_column(String(100))
+    # Имя DM-сообщения объясняющего с карточкой слова (для patch при таймере)
+    word_message_name: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(
+        String(50), default="active", server_default=text("'active'"), nullable=False
+    )
+    # Ручная правка итога раунда (кнопки «+1 / −1» на подтверждении)
+    points_adjustment: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GameWordEvent(Base):
+    """Одно слово в раунде и его исход (17. game_word_events).
+
+    Лог для разбора раунда и подтверждения счёта объясняющим.
+    """
+
+    __tablename__ = "game_word_events"
+    __table_args__ = (
+        Index("idx_game_word_events_round", "round_id"),
+        Index("idx_game_word_events_team", "team_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    round_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("game_rounds.id"), nullable=False
+    )
+    word: Mapped[str] = mapped_column(String(100), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)  # 'guessed' | 'skipped'
+    points: Mapped[int] = mapped_column(Integer, nullable=False)  # +1 или -1
+    team_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("game_teams.id"), nullable=False
+    )
+    is_last: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SnakeGame(Base):
+    """Сессия игры Snake Oil / «Змеиное масло» (18. snake_games)."""
+
+    __tablename__ = "snake_games"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('setup', 'active', 'finished')", name="valid_snake_game_status"
+        ),
+        Index("idx_snake_games_space", "space_id"),
+        Index("idx_snake_games_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="setup", server_default=text("'setup'"), nullable=False
+    )
+    target_score: Mapped[int] = mapped_column(
+        Integer, default=3, server_default=text("3"), nullable=False
+    )
+    # Имя сообщения со счётом в группе (для обновления на месте через messages.patch)
+    scoreboard_message_name: Mapped[str | None] = mapped_column(String(255))
+    # Имя сообщения с карточкой текущего раунда (тоже патчится на месте, а не шлётся заново)
+    round_message_name: Mapped[str | None] = mapped_column(String(255))
+    # Победитель — id профиля (без FK, чтобы не плодить циклическую связь)
+    winner_profile_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SnakePlayer(Base):
+    """Участник игры Snake Oil и его счёт (19. snake_players)."""
+
+    __tablename__ = "snake_players"
+    __table_args__ = (
+        UniqueConstraint("game_id", "profile_id", name="unique_snake_player"),
+        Index("idx_snake_players_game", "game_id"),
+        Index("idx_snake_players_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("snake_games.id"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    score: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SnakeRound(Base):
+    """Раунд игры Snake Oil: покупатель, роль, проблема, победитель (20. snake_rounds)."""
+
+    __tablename__ = "snake_rounds"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'finished')", name="valid_snake_round_status"),
+        Index("idx_snake_rounds_game", "game_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("snake_games.id"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    customer_profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    persona: Mapped[str] = mapped_column(String(100), nullable=False)
+    problem: Mapped[str] = mapped_column(String(255), nullable=False)
+    winner_profile_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(
+        String(50), default="active", server_default=text("'active'"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SnakeOffer(Base):
+    """Предложение продавца в раунде: пара слов для товара (21. snake_offers)."""
+
+    __tablename__ = "snake_offers"
+    __table_args__ = (
+        UniqueConstraint("round_id", "seller_profile_id", name="unique_snake_offer"),
+        Index("idx_snake_offers_round", "round_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    round_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("snake_rounds.id"), nullable=False
+    )
+    seller_profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    word1: Mapped[str] = mapped_column(String(100), nullable=False)
+    word2: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+class GameSession(Base):
+    """Активная игровая сессия (22. game_sessions) — игры «Кто я?» / Quiplash.
+
+    Живое состояние (раунд, ответы, голоса, очки, секреты) хранится в JSONB `state`,
+    поэтому переживает рестарты приложения. Очки подбиваются в leaderboard_ledger
+    при завершении игры (event_type 'game').
+    """
+
+    __tablename__ = "game_sessions"
+    __table_args__ = (
+        CheckConstraint("game_type IN ('who_am_i', 'quiplash')", name="valid_game_type"),
+        CheckConstraint(
+            "status IN ('active', 'finished', 'cancelled')", name="valid_game_status"
+        ),
+        Index("idx_game_sessions_space_status", "space_name", "status"),
+        Index("idx_game_sessions_meeting", "meeting_instance_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    meeting_instance_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("meeting_instances.id")
+    )
+    space_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    game_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="active", server_default=text("'active'"), nullable=False
+    )
+    topic: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""  # ключ OpenRouter; пусто = генерация отключена (банк)
     llm_model: str = "deepseek/deepseek-chat"  # модель OpenRouter (можно free/дёшево)
 
+    # LLM для игр (Anthropic Messages API — Azati)
+    llm_api_key: str = ""  # x-api-key Azati; пусто = генерация отключена (банк слов)
+    llm_base_url: str = "https://llm.azati.ai"  # база Anthropic Messages API
+    llm_games_model: str = "Azati Fast"  # модель для генерации игрового контента
+
     @property
     def database_url(self) -> str:
         return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.db_host}:{self.db_port}/{self.postgres_db}"

@@ -46,18 +46,18 @@ def build_weekly_question_card(personal_q: str, bank_q: str, action_url: str) ->
         "cardsV2": [{
             "cardId": "weeklyQuestion",
             "card": {
-                "header": {"title": "Вопрос недели 💭", "subtitle": "Ответь — из ответов соберём активность"},
+                "header": {"title": "Question of the week 💭", "subtitle": "Answer — we'll build an activity from the answers"},
                 "sections": [
-                    {"header": "Личный вопрос", "widgets": [
+                    {"header": "Personal question", "widgets": [
                         {"textParagraph": {"text": personal_q}},
-                        {"textInput": {"name": "q_llm", "label": "Твой ответ"}},
+                        {"textInput": {"name": "q_llm", "label": "Your answer"}},
                     ]},
-                    {"header": "Общий вопрос", "widgets": [
+                    {"header": "General question", "widgets": [
                         {"textParagraph": {"text": bank_q}},
-                        {"textInput": {"name": "q_bank", "label": "Твой ответ"}},
+                        {"textInput": {"name": "q_bank", "label": "Your answer"}},
                     ]},
                     {"widgets": [{"buttonList": {"buttons": [{
-                        "text": "Отправить ответы",
+                        "text": "Submit answers",
                         "onClick": {"action": {
                             "function": action_url or "submit_weekly_question",
                             "parameters": [
@@ -86,14 +86,14 @@ async def submit_weekly_question(
     if llm_answer:
         db.add(Answer(
             profile_id=profile.id,
-            question_text=q_llm_text or "Личный вопрос",
+            question_text=q_llm_text or "Personal question",
             answer_text=llm_answer[0],
             week_start=week_start,
         ))
     if bank_answer:
         db.add(Answer(
             profile_id=profile.id,
-            question_text=q_bank_text or "Общий вопрос",
+            question_text=q_bank_text or "General question",
             answer_text=bank_answer[0],
             week_start=week_start,
         ))
@@ -137,7 +137,7 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         send_message(
             p.workspace_user_id,
             MessagePayload(
-                text="Вопрос недели 💭",
+                text="Question of the week 💭",
                 card=build_weekly_question_card(personal_q, bank_q, get_settings().chat_app_audience),
             ),
         )

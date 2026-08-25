@@ -27,16 +27,16 @@ def build_checkin_card(instance_id: str, action_url: str = "", count: int = 0) -
             {
                 "cardId": "checkin",
                 "card": {
-                    "header": {"title": "Встреча началась? 🎉", "subtitle": "Отметься, чтобы получить баллы"},
+                    "header": {"title": "Did the meetup start? 🎉", "subtitle": "Check in to earn points"},
                     "sections": [
-                        {"widgets": [{"textParagraph": {"text": f"Отметились: {count}"}}]},
+                        {"widgets": [{"textParagraph": {"text": f"Checked in: {count}"}}]},
                         {
                             "widgets": [
                                 {
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "Я на встрече ✅",
+                                                "text": "I'm at the meetup ✅",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url or "checkin_submit",

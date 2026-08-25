@@ -39,7 +39,7 @@ def score_round(true_pct: int, guess: int, higher: set[str], lower: set[str], gu
 
 
 def build_guess_card(question: str, action_url: str, space_name: str) -> dict:
-    """Карточка для называющего (в личку): поле процента + кнопка «Отправить».
+    """Карточка для называющего (в личку): поле процента + кнопка «Submit».
 
     В параметрах кнопки — space_name группы, чтобы по клику в личке найти сессию.
     """
@@ -48,16 +48,16 @@ def build_guess_card(question: str, action_url: str, space_name: str) -> dict:
             {
                 "cardId": "guesspionage_guess",
                 "card": {
-                    "header": {"title": "Твой процент", "subtitle": question},
+                    "header": {"title": "Your percentage", "subtitle": question},
                     "sections": [
-                        {"widgets": [{"textInput": {"name": "guess", "label": "Твой процент (0–100)"}}]},
+                        {"widgets": [{"textInput": {"name": "guess", "label": "Your percentage (0–100)"}}]},
                         {
                             "widgets": [
                                 {
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "Отправить",
+                                                "text": "Submit",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,
@@ -89,7 +89,7 @@ def build_higher_lower_card(question: str, guess: int, action_url: str) -> dict:
                 "card": {
                     "header": {
                         "title": question,
-                        "subtitle": f"Называющий считает: {guess}%. Правда выше или ниже?",
+                        "subtitle": f"The guesser says: {guess}%. Is the truth higher or lower?",
                     },
                     "sections": [
                         {
@@ -98,7 +98,7 @@ def build_higher_lower_card(question: str, guess: int, action_url: str) -> dict:
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "Выше ⬆️",
+                                                "text": "Higher ⬆️",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,
@@ -110,7 +110,7 @@ def build_higher_lower_card(question: str, guess: int, action_url: str) -> dict:
                                                 },
                                             },
                                             {
-                                                "text": "Ниже ⬇️",
+                                                "text": "Lower ⬇️",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,
@@ -150,31 +150,31 @@ def start_guesspionage(session, space_name: str, action_url: str) -> dict:
     send_dm(
         guesser,
         MessagePayload(
-            text="Твой ход — напиши процент 👇",
+            text="Your turn — write a percentage 👇",
             card=build_guess_card(question, action_url, space_name),
         ),
     )
-    return {"text": f"{question}\n\nНазывающий, напиши свой процент — карточка у тебя в личке 🤫"}
+    return {"text": f"{question}\n\nGuesser, write your percentage — the card is in your DMs 🤫"}
 
 
 def submit_guess(session, user_id: str, form_inputs: dict, space_name: str, action_url: str) -> dict:
     """Принять число называющего и огласить его группе (карточка «выше/ниже»)."""
     values = parse_form_inputs(form_inputs).get("guess", [])
     if not values:
-        return {"text": "Напиши число и нажми «Отправить»."}
+        return {"text": "Write a number and press 'Submit'."}
     try:
         guess = int(values[0])
     except ValueError:
-        return {"text": "Это не число — напиши процент цифрами (0–100)."}
+        return {"text": "That's not a number — write a percentage as digits (0–100)."}
     if not 0 <= guess <= 100:
-        return {"text": "Процент должен быть от 0 до 100."}
+        return {"text": "The percentage must be from 0 to 100."}
     session.state["guess"] = guess
     card = build_higher_lower_card(session.state["question"], guess, action_url)
     try:
-        send_to_space(space_name, text="Называющий написал свой процент. Голосуем!", cards_v2=card["cardsV2"])
+        send_to_space(space_name, text="The guesser wrote their percentage. Let's vote!", cards_v2=card["cardsV2"])
     except Exception:
         logger.exception("guesspionage_reveal_failed")
-    return {"text": "Принято! 🎯 Остальные уже голосуют «выше/ниже»."}
+    return {"text": "Got it! 🎯 The rest are already voting 'higher/lower'."}
 
 
 async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict | None:
@@ -184,7 +184,7 @@ async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict 
         return None  # раунд уже подсчитан
     guesser = state["guesser"]
     if user_id == guesser:
-        return {"text": "Называющий не голосует."}
+        return {"text": "The guesser doesn't vote."}
     state["higher"].discard(user_id)
     state["lower"].discard(user_id)
     (state["higher"] if choice == "higher" else state["lower"]).add(user_id)
@@ -199,4 +199,4 @@ async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict 
         await award_points(db, profile.id, points, "guesspionage")
     GameManager.end(space_name)
     lines = [f"{session.names.get(u, u)}: +{p}" for u, p in score.items()]
-    return {"text": f"Правильный ответ: {state['true_pct']}%\n\n" + "\n".join(lines)}
+    return {"text": f"Correct answer: {state['true_pct']}%\n\n" + "\n".join(lines)}

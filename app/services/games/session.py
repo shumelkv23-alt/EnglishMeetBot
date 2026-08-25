@@ -1,5 +1,5 @@
 # app/services/games/session.py
-"""Каркас игр: in-memory сессия и карточка «Кто играет?»."""
+"""Каркас игр: in-memory сессия и карточка «Who's playing?»."""
 from dataclasses import dataclass, field
 
 
@@ -55,7 +55,7 @@ def build_join_card(
     players: list[str] | None = None,
     names: dict[str, str] | None = None,
 ) -> dict:
-    """Карточка «Кто играет?» с кнопками «Я в деле» (join_game) и «Начать» (start_game).
+    """Карточка «Who's playing?» с кнопками «I'm in» (join_game) и «Начать» (start_game).
 
     Если переданы players/names — в тексте карточки показываем текущий состав и счётчик.
     """
@@ -64,19 +64,19 @@ def build_join_card(
     status = ""
     if players:
         roster = ", ".join(names.get(p, p) for p in players)
-        status = f"Играют ({len(players)}): {roster}"
+        status = f"Playing ({len(players)}): {roster}"
     return {
         "cardsV2": [
             {
                 "cardId": "game_lobby",
                 "card": {
-                    "header": {"title": title, "subtitle": "Кто играет?"},
+                    "header": {"title": title, "subtitle": "Who's playing?"},
                     "sections": [
                         {
                             "widgets": [
                                 {
                                     "textParagraph": {
-                                        "text": "Нажми «Я в деле», чтобы присоединиться. Когда все готовы — «Начать»."
+                                        "text": "Press 'I'm in' to join. When everyone's ready — 'Start'."
                                         + (f"\n{status}" if status else "")
                                     }
                                 }
@@ -88,7 +88,7 @@ def build_join_card(
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "Я в деле",
+                                                "text": "I'm in",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,
@@ -97,7 +97,7 @@ def build_join_card(
                                                 },
                                             },
                                             {
-                                                "text": "Начать",
+                                                "text": "Start",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,

@@ -20,7 +20,7 @@ WORD_BANK: dict[str, list[str]] = {
 
 
 def assign_roles(players: list[str], rng: random.Random | None = None) -> dict:
-    """Выбрать тему, слово и шпиона. rng — для детерминированных тестов."""
+    """Choose тему, слово и шпиона. rng — для детерминированных тестов."""
     rng = rng or random
     topic = rng.choice(list(WORD_BANK.keys()))
     word = rng.choice(WORD_BANK[topic])
@@ -77,10 +77,10 @@ def build_spy_vote_card(
         for p in players
     ]
     tally = tally_votes(votes, players)
-    status_text = "Голоса: " + ", ".join(f"{names.get(p, p)} — {tally[p]}" for p in players)
+    status_text = "Votes: " + ", ".join(f"{names.get(p, p)} — {tally[p]}" for p in players)
     waiting = [p for p in players if p not in votes]
     if waiting:
-        status_text += "\nЖдут голоса: " + ", ".join(names.get(p, p) for p in waiting)
+        status_text += "\nWaiting to vote: " + ", ".join(names.get(p, p) for p in waiting)
     sections = [
         {"widgets": [{"textParagraph": {"text": status_text}}]},
         {"widgets": [{"buttonList": {"buttons": buttons}}]},
@@ -90,7 +90,7 @@ def build_spy_vote_card(
             {
                 "cardId": "spy_vote",
                 "card": {
-                    "header": {"title": "Кто шпион? 🕵️", "subtitle": "Голосуй за подозреваемого"},
+                    "header": {"title": "Who's the spy? 🕵️", "subtitle": "Vote for a suspect"},
                     "sections": sections,
                 },
             }
@@ -99,13 +99,13 @@ def build_spy_vote_card(
 
 
 def build_start_vote_card(topic: str, action_url: str) -> dict:
-    """Карточка после раздачи: тема + кнопка «Начать голосование»."""
+    """Карточка после раздачи: тема + кнопка «Start voting»."""
     return {
         "cardsV2": [
             {
                 "cardId": "spy_start_vote",
                 "card": {
-                    "header": {"title": f"Тема: {topic}", "subtitle": "Обсуждайте слово! Когда готовы — голосуем."},
+                    "header": {"title": f"Topic: {topic}", "subtitle": "Discuss the word! When ready — we vote."},
                     "sections": [
                         {
                             "widgets": [
@@ -113,7 +113,7 @@ def build_start_vote_card(topic: str, action_url: str) -> dict:
                                     "buttonList": {
                                         "buttons": [
                                             {
-                                                "text": "Начать голосование",
+                                                "text": "Start voting",
                                                 "onClick": {
                                                     "action": {
                                                         "function": action_url,
@@ -139,7 +139,7 @@ def start_spy(session, action_url: str) -> dict:
     topic, word, spy = roles["topic"], roles["word"], roles["spy"]
     session.state.update({"topic": topic, "word": word, "spy": spy, "votes": {}})
     for player in session.players:
-        text = f"Ты шпион 🤫. Тема: {topic}" if player == spy else f"Твоё слово: {word}"
+        text = f"You are the spy 🤫. Topic: {topic}" if player == spy else f"Your word: {word}"
         send_dm(player, MessagePayload(text=text))
     return build_start_vote_card(topic, action_url)
 
@@ -170,8 +170,8 @@ async def vote(db, session, user_id: str, target: str, space_name: str, action_u
     score_lines = [f"{session.names.get(u, u)}: +{p}" for u, p in score.items()]
     return {
         "text": (
-            f"Шпионом был {spy_name}! Слово: {state['word']}\n\n"
-            f"Голосование:\n" + "\n".join(vote_lines) + "\n\n"
-            f"Очки:\n" + "\n".join(score_lines)
+            f"The spy was {spy_name}! Word: {state['word']}\n\n"
+            f"Voting:\n" + "\n".join(vote_lines) + "\n\n"
+            f"Points:\n" + "\n".join(score_lines)
         )
     }

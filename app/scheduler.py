@@ -117,6 +117,13 @@ async def _run_inactivity_reminder() -> None:
         logger.info("inactivity_reminder_job sent=%s", sent)
 
 
+async def _run_close_stale_games() -> None:
+    """Джоб каждые 30 сек — закрыть просроченные фазы игр (Quiplash/«Кто я?»)."""
+    from app.services.party_games import close_stale_games
+
+    await close_stale_games()
+
+
 async def init_scheduler() -> None:
     """Создать и запустить шедулер; время джобов — из config."""
     global scheduler
@@ -177,6 +184,15 @@ async def init_scheduler() -> None:
         id="inactivity-reminder",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_close_stale_games,
+        "interval",
+        seconds=30,
+        id="close-stale-games",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
     )
     scheduler.start()
     logger.info("scheduler_started")

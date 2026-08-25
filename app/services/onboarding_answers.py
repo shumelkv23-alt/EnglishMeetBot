@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 
 # Мета-описание вопросов: имя поля формы -> человекочитаемый текст
 QUESTIONS = {
-    "q1": "1. О чём ты можешь говорить часами без остановки?",
-    "q2": "2. Какой вайб встреч тебе ближе?",
-    "q3": "3. Назови ОДНУ тему, которую готов обсуждать прямо сейчас",
-    "q4": "4. В какие дни тебе удобно выделить 30–40 минут?",
-    "q5": "5. Из-за чего ты обычно теряешь интерес или пропускаешь активности?",
-    "q6": "6. Разрешаешь ли использовать твои ответы?",
-    "q7": "7. В каком стиле тебе комфортнее общаться?",
+    "q1": "1. What can you talk about for hours nonstop?",
+    "q2": "2. What meetup vibe is closer to you?",
+    "q3": "3. Name ONE topic you're ready to discuss right now",
+    "q4": "4. On which days can you spare 30–40 minutes?",
+    "q5": "5. Why do you usually lose interest or skip activities?",
+    "q6": "6. Can we use your answers?",
+    "q7": "7. What communication style is more comfortable for you?",
 }
 
 # Вопросы, у которых есть поле «Свой вариант»

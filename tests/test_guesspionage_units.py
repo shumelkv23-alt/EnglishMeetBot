@@ -36,7 +36,7 @@ def test_score_round_exact_guess_no_direction_points():
 def test_build_higher_lower_card_buttons_and_choices():
     card = build_higher_lower_card("Q?", 60, "https://x/hook")
     buttons = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["buttonList"]["buttons"]
-    assert [b["text"] for b in buttons] == ["Выше ⬆️", "Ниже ⬇️"]
+    assert [b["text"] for b in buttons] == ["Higher ⬆️", "Lower ⬇️"]
     choices = [b["onClick"]["action"]["parameters"][1]["value"] for b in buttons]
     assert choices == ["higher", "lower"]
 

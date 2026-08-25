@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _SYSTEM_PROMPT = (
-    "Ты генерируешь один КОРОТКИЙ и ЛЁГКИЙ разговорный вопрос по-русски для "
-    "практики английского на еженедельной встрече коллег. Вопрос простой, живой, "
-    "про повседневное (еда, фильмы, путешествия, хобби, смешные случаи) — без "
-    "абстрактных и философских тем. Располагает к короткому рассказу на 1-2 минуты. "
-    "Интересы собеседника — лишь один из возможных ориентиров, не зацикливайся на них. Верни строго JSON вида "
-    '{"question_text": "текст вопроса"}. Без комментариев и разметки.'
+    "You generate ONE SHORT and EASY conversational question in English for "
+    "English practice at the weekly colleagues' meetup. The question is simple, lively, "
+    "about everyday life (food, movies, travel, hobbies, funny moments) — no "
+    "abstract or philosophical topics. Invites a short 1-2 minute story. "
+    "The person's interests are just one possible guide, don't fixate on them. Return strict JSON of the form "
+    '{"question_text": "question text"}. No comments or markup.'
 )
 
 
@@ -69,16 +69,16 @@ def generate_personal_question(
     if not api_key or not model:
         return None
 
-    interests_text = ", ".join(interests) if interests else "нет явных предпочтений"
+    interests_text = ", ".join(interests) if interests else "no clear preferences"
     user_prompt = (
-        f"Интересы собеседника: {interests_text}. "
-        "НЕ зацикливайся на интересах — задай лёгкий вопрос на ЛЮБУЮ живую повседневную тему "
-        "(еда, путешествия, привычки, музыка, смешные случаи, хобби), лишь изредка касаясь интересов. "
-        "Каждый раз бери новую тему."
+        f"The person's interests: {interests_text}. "
+        "DON'T fixate on interests — ask an easy question on ANY lively everyday topic "
+        "(food, travel, habits, music, funny moments, hobbies), only occasionally touching on interests. "
+        "Pick a new topic each time."
     )
     if avoid:
         user_prompt += (
-            " НЕ повторяй эти прошлые вопросы: " + "; ".join(avoid) + ". Придумай новый, на другую тему."
+            " DON'T repeat these past questions: " + "; ".join(avoid) + ". Come up with a new one on a different topic."
         )
     payload = {
         "model": model,

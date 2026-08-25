@@ -63,7 +63,7 @@ def test_build_spy_vote_card_shows_live_tally_and_waiting():
     text = card["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
     assert "Bob — 1" in text
     assert "Alice — 0" in text
-    assert "Ждут голоса: Bob, Carol" in text
+    assert "Waiting to vote: Bob, Carol" in text
 
 
 def test_build_start_vote_card_has_topic_and_button():

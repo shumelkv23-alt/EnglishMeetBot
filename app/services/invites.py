@@ -13,17 +13,17 @@ def _theme_from_activity(activity: Activity | None) -> str | None:
 
 def build_invite_text(day: str, time: str, theme: str | None) -> str:
     """Персональное приглашение: время + тема (REQ-5.1)."""
-    base = f"Встреча по английскому: {day} в {time} 📅"
+    base = f"English meetup: {day} at {time} 📅"
     if theme:
-        return f"{base}\n\nТема встречи: {theme}"
+        return f"{base}\n\nMeetup topic: {theme}"
     return base
 
 
 def build_escalation_text() -> str:
     """Сообщение организатору при не набранном кворуме (REQ-9.5, REQ-3.5)."""
     return (
-        "Не получилось выбрать время встречи на эту неделю: кворум не набран. "
-        "Реши вручную или задай новые слоты, пожалуйста. 🙏"
+        "Couldn't pick a meetup time this week: quorum not met. "
+        "Decide manually or set new slots, please. 🙏"
     )
 
 
@@ -126,14 +126,14 @@ async def _send_reminder(instance_id: str) -> None:
         )
         space_id = await _config_value(db, "space_id", "")
         if space_id:
-            send_text(space_id, f"⏰ Через час встреча по английскому!\n\n{text}")
+            send_text(space_id, f"⏰ English meetup in an hour!\n\n{text}")
         logger.info("reminder_sent instance=%s", instance_id)
 
 
 def _open_checkin(space_id: str, card: dict) -> None:
     """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space."""
     if space_id:
-        send_space_message(space_id, text="Встреча начинается — отметься! ✅", cards_v2=card.get("cardsV2"))
+        send_space_message(space_id, text="The meetup is starting — check in! ✅", cards_v2=card.get("cardsV2"))
 
 
 def _close_checkin() -> None:
