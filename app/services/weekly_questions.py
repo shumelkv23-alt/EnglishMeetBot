@@ -1,7 +1,7 @@
 """Еженедельный вопрос: карточка, выбор вопросов, сабмит и рассылка."""
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,9 @@ logger = logging.getLogger(__name__)
 
 def current_week_start() -> date:
     """Понедельник текущей недели в таймзоне приложения."""
-    from app.services.weekly_poll import today
+    from app.services.weekly_poll import week_monday
 
-    t = today()
-    return t - timedelta(days=t.weekday())
+    return week_monday()
 
 
 def questions_for_profile(
