@@ -180,6 +180,8 @@ def submit_guess(session, user_id: str, form_inputs: dict, space_name: str, acti
 async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict | None:
     """Записать голос; когда проголосовали все, кроме называющего, — подсчёт и очки."""
     state = session.state
+    if state.get("scored"):
+        return None  # раунд уже подсчитан
     guesser = state["guesser"]
     if user_id == guesser:
         return {"text": "Называющий не голосует."}
@@ -189,6 +191,7 @@ async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict 
     voters = [p for p in session.players if p != guesser]
     if len(state["higher"]) + len(state["lower"]) < len(voters):
         return None  # ждём остальных
+    state["scored"] = True  # до первого await — чтобы повторный клик не начислил очки дважды
 
     score = score_round(state["true_pct"], state["guess"], state["higher"], state["lower"], guesser)
     for user, points in score.items():

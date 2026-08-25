@@ -120,10 +120,13 @@ def start_spy(session, action_url: str) -> dict:
 async def vote(db, session, user_id: str, target: str, space_name: str) -> dict | None:
     """Записать голос «кто шпион»; когда проголосовали все — подсчёт и очки."""
     state = session.state
+    if state.get("scored"):
+        return None  # раунд уже подсчитан
     votes = state["votes"]
     votes[user_id] = target
     if len(votes) < len(session.players):
         return None  # ждём остальных
+    state["scored"] = True  # до первого await — чтобы повторный клик не начислил очки дважды
 
     score = score_spy(state["spy"], votes, session.players)
     for user, points in score.items():
