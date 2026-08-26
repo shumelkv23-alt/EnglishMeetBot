@@ -16,7 +16,7 @@ from app.services.onboarding import (
     save_answer,
 )
 from app.services.onboarding_answers import save_onboarding_answers
-from app.services.levels import level_choice_items, levels_description
+from app.services.levels import build_level_card, level_choice_items, levels_description, normalize_level
 
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
@@ -209,6 +209,20 @@ def _is_games_command(raw_text: str) -> bool:
     return any(lowered == t or lowered.startswith(t + " ") for t in (
         "игры", "играть", "игра", "games", "game",
     ))
+
+
+def _is_level_command(raw_text: str) -> bool:
+    """Пользователь просит показать/поменять свой уровень (команда /level).
+
+    Google Chat перехватывает '/...' как нативную слэш-команду, поэтому в живой
+    переписке реальный триггер — '!level'; '/level' остаётся для тестов.
+    """
+    text = raw_text.lower().strip()
+    for prefix in ("/", "!"):
+        if text.startswith(prefix):
+            text = text[1:].strip()
+            break
+    return any(text == t or text.startswith(t + " ") for t in ("level", "уровень", "lvl"))
 
 
 def _game_command(raw_text: str) -> str | None:
@@ -869,6 +883,57 @@ async def _submit_onboarding(user: dict, space: dict, form_inputs: dict) -> dict
     return {
         "text": "Thanks, your form is saved! We'll use your answers to pick topics and a partner for the next meetup 🔥"
     }
+
+
+async def _level_payload(chat_data: dict) -> dict:
+    """Payload для /level: карточка выбора уровня в личке (с текущим уровнем), текст в группе."""
+    space = _extract_space_dict(chat_data)
+    if not _space_is_dm(space):
+        return {"text": "DM me to change your English level 🙌"}
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    current = None
+    if workspace_user_id:
+        try:
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                    chat_space_id=_dm_space_name(space),
+                )
+                current = profile.english_level
+        except Exception:
+            logger.exception("level_command_profile_failed")
+    return build_level_card(current, settings.chat_app_audience)
+
+
+async def _set_level(chat_data: dict, common: dict) -> JSONResponse:
+    """Сохранение выбранного уровня из карточки /level (или backfill)."""
+    from app.services.form_parsing import parse_form_inputs
+
+    form_inputs = common.get("formInputs", {}) or {}
+    values = parse_form_inputs(form_inputs).get("q_level", [])
+    level = normalize_level(values[0]) if values else None
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    if workspace_user_id and level:
+        try:
+            space = _extract_space_dict(chat_data)
+            async with AsyncSessionLocal() as db:
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                    chat_space_id=_dm_space_name(space),
+                )
+                profile.english_level = level
+                await db.commit()
+        except Exception:
+            logger.exception("set_level_failed")
+            return _addon_response({"text": "Couldn't save your level. Try again 🤞"})
+        return _addon_response(
+            {"text": f"Got it — your level is now {level}. Questions and vocabulary will match it 🎯"}
+        )
+    return _addon_response({"text": "Something went wrong. Try again."})
 
 
 async def _submit_weekly_question(chat_data: dict, common: dict) -> JSONResponse:
@@ -1879,6 +1944,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 return _addon_response(response_msg)
             if method == "submit_weekly_question":
                 return await _submit_weekly_question(chat_data, common)
+            if method == "set_level":
+                return await _set_level(chat_data, common)
             if method == "submit_weekly_poll":
                 return _addon_response(await _submit_weekly_poll(chat_data, common))
             if method == "submit_daily_poll":
@@ -2003,6 +2070,9 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 if _space_is_dm(space):
                     return await _dm_games_command_response(chat_data)
                 return await _games_command_response(chat_data)
+
+            if _is_level_command(raw_text):
+                return _addon_response(await _level_payload(chat_data))
 
             # Команды запуска игр Alias / Snake Oil
             if _is_alias_command(raw_text):
@@ -2149,6 +2219,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if _space_is_dm(space):
                 return await _dm_games_command_response(event)
             return await _games_command_response(event)
+        if _is_level_command(raw_text):
+            return JSONResponse(content=await _level_payload(event))
         if _is_alias_command(raw_text):
             return await _alias_command_response(event, raw_text)
         if _is_snake_command(raw_text):
@@ -2233,6 +2305,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 {"formInputs": form_inputs},
             )
             return _addon_response(response_msg)
+        if function_name == "set_level" or method == "set_level":
+            user = event.get("user", {})
+            space = event.get("space", {})
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            return await _set_level({"user": user, "space": space}, {"formInputs": form_inputs})
         if function_name == "submit_daily_poll" or method == "submit_daily_poll":
             user = event.get("user", {})
             space = event.get("space", {})
