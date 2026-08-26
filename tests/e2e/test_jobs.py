@@ -42,7 +42,7 @@ async def _make_meeting(db, poll, start: datetime) -> MeetingInstance:
 
 
 async def test_finalize_creates_meeting_on_quorum(db, today_poll):
-    for i in range(3):  # кворум по умолчанию = 3
+    for i in range(4):  # кворум по умолчанию = 4
         p = await get_or_create_profile(db, f"users/e2e_fin_{i}")
         await submit_poll(db, p, FORM_1500)
 
@@ -60,8 +60,9 @@ async def test_finalize_creates_meeting_on_quorum(db, today_poll):
 
 
 async def test_finalize_cancels_without_quorum(db, today_poll):
-    p = await get_or_create_profile(db, "users/e2e_cancel")
-    await submit_poll(db, p, FORM_1500)  # 1 голос < кворума 3
+    for i in range(3):  # 3 голоса < кворума 4
+        p = await get_or_create_profile(db, f"users/e2e_cancel_{i}")
+        await submit_poll(db, p, FORM_1500)
 
     result = await finalize_day(db, today_poll, 0)
     assert result is None

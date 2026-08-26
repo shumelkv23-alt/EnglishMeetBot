@@ -327,7 +327,7 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
 
     Возвращает None, если квота не набрана или встреча на этот день уже создана.
     """
-    quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
+    quorum = int((await get_or_create_config(db, "quorum_threshold", 4)).value or 4)
     slots = (
         await db.execute(
             select(PollSlot).where(PollSlot.poll_id == poll.id, PollSlot.day_of_week == day_of_week)
