@@ -16,6 +16,7 @@ from app.services.levels import build_level_card
 from app.services.onboarding import ONBOARDING_QUESTION
 from app.services.onboarding_answers import QUESTIONS as ONBOARDING_QUESTIONS
 from app.services.question_bank import bank_questions_for
+from app.services.week_theme import week_theme
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +32,16 @@ def current_week_start() -> date:
 
 
 def questions_for_profile(
-    interests: list[str] | None, week_start: date, level: str, avoid: list[str] | None = None
+    interests: list[str] | None, week_start: date, level: str,
+    avoid: list[str] | None = None, theme: str | None = None,
 ) -> tuple[str, str]:
-    """Два вопроса недели: (персональный LLM по уровню, общий из банка).
+    """Два вопроса недели: (персональный LLM по теме+уровню, общий из банка).
 
-    Персональный — по интересам и уровню, без повтора прошлых (avoid);
+    Персональный — по теме недели, интересам и уровню, без повтора прошлых (avoid);
     при сбое LLM — запасной банковский (bank[1]). Общий — bank[0], одинаковый для всех.
     """
     bank = bank_questions_for(week_start)
-    personal = generate_personal_question(interests or [], level=level, avoid=avoid)
+    personal = generate_personal_question(interests or [], level=level, avoid=avoid, theme=theme)
     if personal is None:
         personal = bank[1]
     return personal, bank[0]
@@ -115,6 +117,7 @@ async def submit_weekly_question(
 async def send_weekly_questions(db: AsyncSession) -> int:
     """Рассылка еженедельных вопросов активным профилям без ответа за неделю."""
     week_start = current_week_start()
+    theme = week_theme(week_start)
     profiles = (
         await db.execute(
             select(Profile).where(
@@ -152,7 +155,7 @@ async def send_weekly_questions(db: AsyncSession) -> int:
             select(Answer.question_text).where(Answer.profile_id == p.id)
         )).scalars().all())
         personal_q, bank_q = await asyncio.to_thread(
-            questions_for_profile, p.interests, week_start, p.english_level or "A2", past
+            questions_for_profile, p.interests, week_start, p.english_level or "A2", past, theme
         )
         send_message(
             p.workspace_user_id,

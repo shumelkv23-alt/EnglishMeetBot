@@ -71,6 +71,7 @@ def generate_personal_question(
     timeout: float = 10.0,
     avoid: list[str] | None = None,
     level: str = "A2",
+    theme: str | None = None,
 ) -> str | None:
     """Сгенерировать персональный вопрос по интересам участника.
 
@@ -84,10 +85,12 @@ def generate_personal_question(
         return None
 
     interests_text = ", ".join(interests) if interests else "no clear preferences"
-    user_prompt = (
-        f"The person's interests: {interests_text}. "
+    user_prompt = f"The person's interests: {interests_text}. "
+    if theme:
+        user_prompt += f"This week's meetup theme: {theme}. "
+    user_prompt += (
         "DON'T fixate on interests — ask an easy question on ANY lively everyday topic "
-        "(food, travel, habits, music, funny moments, hobbies), only occasionally touching on interests. "
+        "(food, travel, habits, music, funny moments, hobbies), only occasionally touching on interests or the theme. "
         "Pick a new topic each time."
     )
     if avoid:

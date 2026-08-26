@@ -38,7 +38,7 @@ def test_questions_for_profile_passes_level(monkeypatch):
 
     captured = {}
 
-    def fake_generate(interests, level="A2", avoid=None):
+    def fake_generate(interests, level="A2", avoid=None, theme=None):
         captured["level"] = level
         return "personal?"
 

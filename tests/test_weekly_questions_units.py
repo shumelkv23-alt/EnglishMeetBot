@@ -20,7 +20,7 @@ def test_build_card_has_two_questions_and_button():
 def test_questions_for_profile_uses_llm(monkeypatch):
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, level="A2", avoid=None: "Твой персональный вопрос",
+        lambda interests, level="A2", avoid=None, theme=None: "Твой персональный вопрос",
     )
     personal, bank = questions_for_profile(["кино"], date(2026, 8, 24), "B1")
     assert personal == "Твой персональный вопрос"
@@ -30,7 +30,7 @@ def test_questions_for_profile_uses_llm(monkeypatch):
 def test_questions_for_profile_falls_back_to_bank(monkeypatch):
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, level="A2", avoid=None: None,
+        lambda interests, level="A2", avoid=None, theme=None: None,
     )
     from app.services.question_bank import bank_questions_for
 
