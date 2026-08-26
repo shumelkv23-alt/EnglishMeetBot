@@ -115,3 +115,93 @@ def sample_product_words(count: int, exclude: set[str] | None = None) -> list[st
     """До count случайных КОНКРЕТНЫХ существительных для Snake Oil (без exclude)."""
     pool = [w for w in PRODUCT_NOUNS if exclude is None or w not in exclude]
     return random.sample(pool, min(count, len(pool)))
+def _hangman_words() -> dict[str, str]:
+    """Слова «Виселицы» → короткая подсказка (одно слово без пробелов/дефисов).
+
+    Подсказка — краткое описание, чтобы слово можно было угадать по смыслу
+    («это сладкое», «это животное», «это металлический инструмент»).
+    """
+    groups: list[tuple[str, list[str]]] = [
+        # животные
+        ("animal", ["cat", "dog", "horse", "cow", "lion", "tiger", "elephant",
+                      "monkey", "rabbit", "bear", "wolf", "fox", "snake", "frog",
+                      "mouse", "sheep", "goat", "pig"]),
+        ("bird", ["bird", "chicken", "duck", "penguin"]),
+        ("insect", ["spider", "bee", "butterfly"]),
+        ("sea animal", ["fish", "whale", "shark"]),
+        # еда
+        ("sweet food", ["chocolate", "cake", "sugar", "honey"]),
+        ("drink", ["milk", "coffee", "tea", "water", "juice"]),
+        ("fruit or vegetable", ["apple", "banana", "orange", "lemon", "potato",
+                            "carrot", "tomato"]),
+        ("food", ["pizza", "hamburger", "spaghetti", "bread", "cheese", "egg",
+                 "soup", "salad", "rice", "meat", "salt"]),
+        # предметы
+        ("metal tool", ["key", "scissors", "hammer", "nail", "screwdriver"]),
+        ("furniture", ["chair", "table", "bed", "sofa", "cupboard", "shelf", "ladder"]),
+        ("household item", ["door", "window", "phone", "computer", "book", "pen",
+                            "pencil", "paper", "clock", "lamp", "mirror", "umbrella",
+                            "bag", "wallet", "glasses", "watch", "camera",
+                            "television", "radio", "pillow", "blanket", "broom",
+                            "bucket", "rope"]),
+        # места
+        ("place at home", ["kitchen", "bathroom", "bedroom", "garden"]),
+        ("city place", ["school", "hospital", "airport", "station", "library",
+                            "museum", "bank", "market", "restaurant", "hotel",
+                            "zoo", "park", "church"]),
+        ("place in nature", ["beach", "mountain", "forest", "river", "lake",
+                              "island", "bridge", "tunnel", "castle"]),
+        # транспорт
+        ("transport", ["car", "bus", "train", "plane", "bicycle", "motorcycle",
+                       "boat", "ship", "helicopter", "taxi", "truck", "tram",
+                       "subway", "rocket", "scooter"]),
+        # профессии
+        ("profession", ["doctor", "teacher", "policeman", "firefighter", "chef",
+                       "farmer", "driver", "pilot", "dentist", "nurse", "soldier",
+                       "artist", "musician", "dancer", "singer", "actor", "waiter",
+                       "judge", "lawyer", "engineer", "scientist", "photographer",
+                       "hairdresser", "tailor", "baker"]),
+        # тело и одежда
+        ("body part", ["head", "hand", "foot", "eye", "ear", "nose", "mouth",
+                        "tooth", "hair", "finger", "leg", "arm", "shoulder",
+                        "knee", "heart", "stomach"]),
+        ("clothing", ["shirt", "trousers", "dress", "skirt", "shoes", "socks",
+                    "hat", "coat", "jacket", "gloves", "scarf", "belt", "button"]),
+        # глаголы
+        ("action", ["run", "jump", "swim", "fly", "sleep", "eat", "drink",
+                      "read", "write", "sing", "dance", "laugh", "cry", "cook",
+                      "drive", "climb", "throw", "catch", "paint", "draw",
+                      "build", "break", "open", "close", "push", "pull", "carry",
+                      "hide", "find", "win", "lose", "think", "smile"]),
+        # прилагательные
+        ("quality", ["big", "small", "fast", "slow", "hot", "cold", "happy",
+                      "sad", "angry", "tired", "hungry", "thirsty", "old",
+                      "young", "tall", "short", "loud", "quiet", "clean", "dirty",
+                      "heavy", "light", "soft", "hard", "wet", "dry", "expensive",
+                      "cheap", "beautiful", "dangerous", "funny"]),
+        # природа и погода
+        ("nature", ["sun", "moon", "star", "cloud", "rain", "snow", "wind",
+                     "storm", "thunder", "lightning", "rainbow", "flower", "tree",
+                     "grass", "leaf", "stone", "sand", "fire", "ice", "smoke",
+                     "shadow"]),
+    ]
+    result: dict[str, str] = {}
+    for hint, words in groups:
+        for word in words:
+            result[word] = hint
+    return result
+
+
+HANGMAN_WORDS: dict[str, str] = _hangman_words()
+
+
+def random_hangman_word(exclude: set[str] | None = None) -> tuple[str, str] | None:
+    """Случайное слово для «Виселицы» вместе с подсказкой: (word, hint)."""
+    pool = [
+        (w, h) for w, h in HANGMAN_WORDS.items()
+        if exclude is None or w not in exclude
+    ]
+    if not pool:
+        return None
+    return random.choice(pool)
+
