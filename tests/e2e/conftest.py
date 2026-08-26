@@ -17,11 +17,13 @@ import httpx
 import pytest
 from sqlalchemy import delete, select
 
+from app.cards.models import Card
 from app.database import AsyncSessionLocal
 from app.models import (
     Answer,
     Attendance,
     DailyPoll,
+    GameSession,
     LeaderboardLedger,
     MeetingInstance,
     PollQuestion,
@@ -59,6 +61,8 @@ async def _delete_polls(db, poll_ids: list[int]) -> None:
     meeting_ids = select(MeetingInstance.id).where(MeetingInstance.poll_id.in_(poll_ids))
     await db.execute(delete(Attendance).where(Attendance.meeting_instance_id.in_(meeting_ids)))
     await db.execute(delete(LeaderboardLedger).where(LeaderboardLedger.meeting_instance_id.in_(meeting_ids)))
+    await db.execute(delete(Card).where(Card.meeting_id.in_(meeting_ids)))
+    await db.execute(delete(GameSession).where(GameSession.meeting_instance_id.in_(meeting_ids)))
     await db.execute(
         delete(PollVote).where(
             PollVote.poll_response_id.in_(
