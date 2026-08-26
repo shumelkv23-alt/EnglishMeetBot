@@ -383,6 +383,27 @@ GRAMMAR_TASKS: list[list] = [
 
 
 # ---------------------------------------------------------------------------
+# Тест по модулю (грамматическая часть). Ключ — id модуля; значение — задание
+# формата GRAMMAR_TASKS: [вопрос, [3 варианта], верный_индекс, пояснение].
+# В тесте модуля это дополняет 6 словарных вопросов (по terms модуля).
+# ---------------------------------------------------------------------------
+MODULE_QUIZ: dict[str, list] = {
+    "start": ["Choose the softer request.", ["Can I ask a question?", "Could I ask a question?", "I ask a question?"], 1, "Use <b>Could I…?</b> to sound softer and more polite."],
+    "status": ["Choose the correct work-in-progress update.", ["We working on it.", "We are working on it.", "We work on it now."], 1, "Use <b>are + verb-ing</b> for work in progress."],
+    "clarify": ["Choose the correct indirect question.", ["Could you tell me when is it due?", "Could you tell me when it is due?", "Could you tell me when due is it?"], 1, "After “Could you tell me…”, use normal word order: <b>when it is due</b>."],
+    "decide": ["Choose the careful possibility.", ["This might cause a delay.", "This might to cause a delay.", "This is might cause a delay."], 0, "<b>might + base verb</b> expresses a careful possibility."],
+    "recover": ["Complete: “I need ___ check the access.”", ["—", "to", "for"], 1, "After <b>need</b>, use <b>to + verb</b>: “need to check”."],
+    "explain": ["Complete: “The review took longer, ___ we moved the call.”", ["because", "so", "however"], 1, "Use <b>so</b> before a result."],
+    "simulate": ["Choose the clearest status update.", ["We are delayed because the review took longer.", "We are delayed, so the review took longer.", "We are delay because the review."], 0, "Status + reason: <b>because</b> introduces the reason."],
+    "schedule": ["Choose the correct time phrase.", ["The call is on 3 pm.", "The call is at 3 pm.", "The call is by 3 pm."], 1, "Use <b>at</b> with a precise time."],
+    "collaborate": ["Choose the correct obligation.", ["We have to align first.", "We have align first.", "We have to aligning first."], 0, "<b>have to + base verb</b>: “have to align”."],
+    "feedback": ["Choose the polite request.", ["Would you mind share the file?", "Would you mind to share the file?", "Would you mind sharing the file?"], 2, "After <b>Would you mind</b>, use verb-ing: “sharing”."],
+    "demo": ["Choose the result-focused update.", ["We have completed the demo.", "We have complete the demo.", "We completed the demo now."], 0, "Present Perfect = <b>have + past participle</b>."],
+    "email": ["Choose the already-planned action.", ["I will going to send it.", "I am going to send it.", "I going to send it."], 1, "An existing plan uses <b>am/is/are going to + verb</b>."],
+}
+
+
+# ---------------------------------------------------------------------------
 # Справочные хелперы (без БД) — для engine и тестов.
 # ---------------------------------------------------------------------------
 
@@ -406,5 +427,13 @@ def block_for_module(module_id: str) -> dict | None:
     """Блок, к которому относится модуль (по списку modules), иначе None."""
     for b in BLOCKS:
         if module_id in b["modules"]:
+            return b
+    return None
+
+
+def block_by_id(block_id: str) -> dict | None:
+    """Блок по id, иначе None."""
+    for b in BLOCKS:
+        if b["id"] == block_id:
             return b
     return None

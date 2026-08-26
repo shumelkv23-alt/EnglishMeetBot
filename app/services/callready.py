@@ -28,14 +28,20 @@ from app.services import leaderboard
 
 logger = logging.getLogger(__name__)
 
-MODULE_POINTS = 10
-GRAMMAR_POINTS = 1
+READ_MODULE_POINTS = 1    # прочитан модуль
+READ_BLOCK_POINTS = 3     # прочитан блок (все 4 модуля)
+MODULE_TEST_POINTS = 1    # пройден тест по модулю
+BLOCK_TEST_POINTS = 2     # пройден тест по блоку
+
+# Пороги прохождения тестов.
+MODULE_TEST_PASS = 6      # из 7 (6 словарь + 1 грамматика)
+BLOCK_TEST_PASS = 8       # из 10 (6 словарь + 4 грамматика)
 
 # Единый cardId для всех карточек курса: навигация обновляет карточку НА МЕСТЕ
 # (messages.patch / updateMessageAction), как у одиночных ДМ-игр.
 CARD = "callready"
 
-_OPTION_LETTERS = ("A", "B", "C")
+_OPTION_LETTERS = ("A", "B", "C", "D")
 
 
 def _action_url() -> str:
@@ -82,8 +88,11 @@ def _card(card_id: str, title: str, subtitle: str, widgets: list[dict]) -> dict:
 def _fresh_state() -> dict:
     return {
         "current_module": bank.MODULES[0]["id"],
-        "done": [],
-        "grammar": {},
+        "done": [],           # прочитанные модули
+        "blocks_read": [],    # полностью прочитанные блоки (все 4 модуля)
+        "modules_tested": [], # пройденные тесты модулей
+        "blocks_tested": [],  # пройденные тесты блоков
+        "grammar": {},        # верные ответы в секции grammar practice (без баллов)
         "phrasebook_seen": [],
     }
 
@@ -117,33 +126,150 @@ def _module_header(module: dict, state: dict) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def module_points(state: dict) -> int:
-    """Баллы из состояния: 10 за модуль + 1 за верный грамматический ответ."""
+    """Баллы из состояния: +1 модуль, +3 блок, +1 тест модуля, +2 тест блока."""
     done = len(state.get("done", []))
-    grammar = len(state.get("grammar", {}))
-    return done * MODULE_POINTS + grammar * GRAMMAR_POINTS
+    blocks_read = len(state.get("blocks_read", []))
+    modules_tested = len(state.get("modules_tested", []))
+    blocks_tested = len(state.get("blocks_tested", []))
+    return (
+        done * READ_MODULE_POINTS
+        + blocks_read * READ_BLOCK_POINTS
+        + modules_tested * MODULE_TEST_POINTS
+        + blocks_tested * BLOCK_TEST_POINTS
+    )
 
 
 def progress_summary(state: dict) -> str:
     """Текстовый отчёт о прогрессе для карточки «📈 My progress»."""
     done = set(state.get("done", []))
+    modules_tested = set(state.get("modules_tested", []))
+    blocks_read = set(state.get("blocks_read", []))
+    blocks_tested = set(state.get("blocks_tested", []))
     grammar = state.get("grammar", {})
     phrasebook = state.get("phrasebook_seen", [])
 
     block_lines = []
     for b in bank.BLOCKS:
-        n = sum(1 for m in b["modules"] if m in done)
-        block_lines.append(f"{b['title']}: {n}/{len(b['modules'])}")
+        read = sum(1 for m in b["modules"] if m in done)
+        tested = sum(1 for m in b["modules"] if m in modules_tested)
+        mark = "✅" if b["id"] in blocks_tested else "▫️"
+        block_lines.append(f"{b['title']}: read {read}/4 · tests {tested}/4 {mark}")
+
     correct = sum(1 for v in grammar.values() if v)
-    total_tasks = len(bank.GRAMMAR_TASKS)
-    pct = round(100 * correct / total_tasks) if total_tasks else 0
 
     return (
-        f"Modules completed: **{len(done)}/{len(bank.MODULES)}**\n"
+        f"Modules read: **{len(done)}/{len(bank.MODULES)}** · tests **{len(modules_tested)}/{len(bank.MODULES)}**\n"
+        f"Blocks read: **{len(blocks_read)}/{len(bank.BLOCKS)}** · tests **{len(blocks_tested)}/{len(bank.BLOCKS)}**\n\n"
         + "\n".join(block_lines)
-        + f"\n\nGrammar: **{correct}/{total_tasks}** correct ({pct}%)\n"
+        + f"\n\nGrammar practice: **{correct}/{len(bank.GRAMMAR_TASKS)}** correct\n"
         + f"Phrasebook: **{len(phrasebook)}/{len(bank.BACKUP)}** sections seen\n\n"
         + f"Points earned: **{module_points(state)}**"
     )
+
+
+# ---------------------------------------------------------------------------
+# Тесты модуля и блока (чистые, детерминированные — без БД и без random)
+# ---------------------------------------------------------------------------
+
+def _unique_ru() -> list[str]:
+    """Уникальные русские значения всех терминов (пул дистракторов)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in bank.MODULES:
+        for t in m["terms"]:
+            if t[1] not in seen:
+                seen.add(t[1])
+                out.append(t[1])
+    return out
+
+
+def _pick_even(items: list, k: int) -> list:
+    """Выбрать k элементов, равномерно распределённых по списку."""
+    n = len(items)
+    if n <= k:
+        return list(items)
+    idxs = [int(i * (n - 1) / (k - 1)) for i in range(k)]
+    return [items[i] for i in idxs]
+
+
+def _vocab_question(term: list, gi: int) -> dict:
+    """Словарный вопрос «What does X mean?»: 4 варианта, детерминированно.
+
+    Положение верного ответа и дистракторы зависят только от глобального индекса
+    термина gi — стабильно между кликами (карточки обновляются на месте).
+    """
+    correct = term[1]
+    all_ru = _unique_ru()
+    n = len(all_ru)
+    distractors: list[str] = []
+    for k in range(1, 4):
+        ru = all_ru[(gi * 3 + k * 7) % n]
+        if ru != correct and ru not in distractors:
+            distractors.append(ru)
+    for ru in all_ru:  # добираем при коллизиях/дублях
+        if len(distractors) >= 3:
+            break
+        if ru != correct and ru not in distractors:
+            distractors.append(ru)
+    options = [correct] + distractors
+    correct_idx = gi % 4
+    if correct_idx != 0:
+        options[0], options[correct_idx] = options[correct_idx], options[0]
+    return {
+        "prompt": f"What does “{term[0]}” mean?",
+        "options": options,
+        "correct": correct_idx,
+        "explain": term[2],
+    }
+
+
+def _grammar_question(task: list) -> dict:
+    """Грамматическое задание банка → словарь вопроса теста."""
+    return {"prompt": task[0], "options": task[1], "correct": task[2], "explain": task[3]}
+
+
+def module_test_questions(module_id: str) -> list[dict]:
+    """Тест модуля: 6 словарных вопросов (по terms) + 1 грамматический."""
+    m = bank.module_by_id(module_id)
+    if m is None or module_id not in bank.MODULE_QUIZ:
+        return []
+    qs: list[dict] = []
+    gi = 0
+    for mod in bank.MODULES:
+        if mod["id"] == module_id:
+            for t in mod["terms"]:
+                qs.append(_vocab_question(t, gi))
+                gi += 1
+            break
+        gi += len(mod["terms"])
+    qs.append(_grammar_question(bank.MODULE_QUIZ[module_id]))
+    return qs
+
+
+def block_test_questions(block_id: str) -> list[dict]:
+    """Тест блока (порт checkpoint): 6 словарных + 4 грамматических вопроса."""
+    b = bank.block_by_id(block_id)
+    if b is None:
+        return []
+    terms: list[tuple[list, int]] = []
+    gi = 0
+    for mod in bank.MODULES:
+        if mod["id"] in b["modules"]:
+            for t in mod["terms"]:
+                terms.append((t, gi))
+                gi += 1
+        else:
+            gi += len(mod["terms"])
+    vocab = _pick_even(terms, 6)
+    task_ids: list[int] = []
+    for ti in b["grammar"]:
+        for tid in bank.GRAMMAR_TOPICS[ti]["tasks"]:
+            if tid not in task_ids:
+                task_ids.append(tid)
+    grammar = _pick_even(task_ids, 4)
+    qs = [_vocab_question(t, gi) for t, gi in vocab]
+    qs += [_grammar_question(bank.GRAMMAR_TASKS[tid]) for tid in grammar]
+    return qs
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +306,7 @@ def build_module_card(module: dict, state: dict) -> dict:
         {"textParagraph": {"text": "**Useful chunks**\n\n" + _terms_text(module)}},
         {"buttonList": {"buttons": [
             _btn("Next module →", "callready_next_module", module=module["id"]),
+            _btn("📝 Module test", "callready_mtest", module=module["id"], q=0, score=0),
             _btn("↩ Back", "callready_prev_module", module=module["id"]),
         ]}},
         {"buttonList": {"buttons": [
@@ -193,16 +320,23 @@ def build_module_card(module: dict, state: dict) -> dict:
 
 
 def build_route_card(state: dict) -> dict:
-    """Карточка маршрута (cardId callreadyRoute): 3 блока с прогрессом."""
+    """Карточка маршрута (cardId callreadyRoute): 3 блока с прогрессом + блок-тесты."""
     done = set(state.get("done", []))
+    modules_tested = set(state.get("modules_tested", []))
+    blocks_tested = set(state.get("blocks_tested", []))
     widgets = []
     for b in bank.BLOCKS:
         lines = []
         for m_id in b["modules"]:
             m = bank.module_by_id(m_id)
             mark = "✅" if m_id in done else "▫️"
-            lines.append(f"{mark} {m['icon']} {m['title']}" if m else f"{mark} {m_id}")
+            tmark = " 🧪" if m_id in modules_tested else ""
+            lines.append(f"{mark} {m['icon']} {m['title']}{tmark}" if m else f"{mark} {m_id}")
         widgets.append({"textParagraph": {"text": f"**{b['title']}**\n" + "\n".join(lines)}})
+        bmark = "✅ " if b["id"] in blocks_tested else ""
+        widgets.append({"buttonList": {"buttons": [
+            _btn(f"{bmark}🏁 Block test", "callready_btest", block=b["id"], q=0, score=0),
+        ]}})
     widgets.append({"buttonList": {"buttons": [
         _btn("📚 Continue", "callready_continue"),
         _btn("🧠 Grammar practice", "callready_practice"),
@@ -288,15 +422,15 @@ def build_task_card(topic_idx: int, pos: int) -> dict:
     return _card(CARD, f"🧠 {topic['title']}", f"Question {pos + 1}/{len(task_ids)}", widgets)
 
 
-def build_feedback_card(topic_idx: int, pos: int, correct: bool, task: list, points: int) -> dict:
-    """Карточка результата ответа: верно/неверно + пояснение + «дальше»."""
+def build_feedback_card(topic_idx: int, pos: int, correct: bool, task: list) -> dict:
+    """Карточка результата ответа в grammar practice: верно/неверно + пояснение."""
     topic = bank.GRAMMAR_TOPICS[topic_idx]
     task_ids = topic["tasks"]
     task_id = task_ids[pos]
     question, options, correct_idx = task[0], task[1], task[2]
 
     if correct:
-        head = f"✅ Correct! (+{points} point{'s' if points != 1 else ''})"
+        head = "✅ Correct!"
     else:
         head = f"❌ Not quite — correct answer: **{options[correct_idx]}**"
     body = f"{head}\n\n**{question}**\n\n💡 {_md(task[3])}"
@@ -323,6 +457,68 @@ def build_progress_card(state: dict) -> dict:
         ]}},
     ]
     return _card(CARD, "Your progress 📈", "Survival English for Calls", widgets)
+
+
+# ---------------------------------------------------------------------------
+# Карточки тестов модуля и блока
+# ---------------------------------------------------------------------------
+
+def _test_question_card(
+    title: str, q_idx: int, total: int, question: dict, score: int,
+    answer_method: str, scope: dict,
+) -> dict:
+    """Карточка вопроса теста: вопрос + кнопки вариантов ответа."""
+    buttons = [
+        _btn(f"{_OPTION_LETTERS[i]}. {opt}", answer_method, **scope, q=q_idx, score=score, answer=i)
+        for i, opt in enumerate(question["options"])
+    ]
+    widgets = [
+        {"textParagraph": {"text": f"**Question {q_idx + 1}/{total}**\n\n{question['prompt']}"}},
+        {"buttonList": {"buttons": buttons}},
+        {"textParagraph": {"text": f"Score so far: **{score}/{q_idx}**"}},
+    ]
+    return _card(CARD, title, f"Question {q_idx + 1}/{total}", widgets)
+
+
+def _test_feedback_card(
+    title: str, q_idx: int, total: int, question: dict, correct: bool,
+    new_score: int, next_method: str, scope: dict,
+) -> dict:
+    """Карточка результата ответа в тесте + кнопка «Next question →»."""
+    if correct:
+        head = "✅ Correct!"
+    else:
+        head = f"❌ Not quite — correct answer: **{question['options'][question['correct']]}**"
+    body = f"{head}\n\n💡 {_md(question['explain'])}\n\nScore: **{new_score}/{q_idx + 1}**"
+    widgets = [{"textParagraph": {"text": body}}]
+    widgets.append({"buttonList": {"buttons": [
+        _btn("Next question →", next_method, **scope, q=q_idx + 1, score=new_score),
+    ]}})
+    widgets.append({"buttonList": {"buttons": [_btn("🏠 Menu", "callready_menu")]}})
+    return _card(CARD, title, f"Question {q_idx + 1}/{total}", widgets)
+
+
+def _test_result_card(
+    title: str, passed: bool, score: int, total: int, threshold: int,
+    awarded: int, back_method: str | None, back_label: str | None, scope: dict,
+) -> dict:
+    """Итоговая карточка теста: пройден/не пройден + куда дальше."""
+    if passed:
+        head = f"🏁 **Test passed!** +{awarded} pts"
+    else:
+        head = f"↻ **Not passed yet** — {score}/{total} correct"
+    body = (
+        f"{head}\n\n"
+        f"Final score: **{score}/{total}**\n"
+        f"To pass: **{threshold}/{total}** correct."
+    )
+    widgets = [{"textParagraph": {"text": body}}]
+    buttons = []
+    if back_method and back_label:
+        buttons.append(_btn(back_label, back_method, **scope))
+    buttons.append(_btn("🏠 Menu", "callready_menu"))
+    widgets.append({"buttonList": {"buttons": buttons}})
+    return _card(CARD, title, "Test result", widgets)
 
 
 # ---------------------------------------------------------------------------
@@ -388,37 +584,53 @@ async def show_module(db: AsyncSession, profile: Profile, module_id: str) -> dic
 
 
 async def next_module(db: AsyncSession, profile: Profile, module_id: str) -> dict:
-    """Завершить модуль (+10, первый раз) и показать следующий (или финал)."""
+    """Завершить модуль: +1 за прочтение модуля, +3 за прочтение блока (впервые)."""
     module = _resolve_module(module_id)
     if module is None:
         return {"text": "Module not found 🤷"}
     row = await _get_or_create_progress(db, profile.id)
     state = _state_of(row)
     done = list(state.get("done", []))
+    blocks_read = list(state.get("blocks_read", []))
 
-    awarded = 0
-    if module_id not in done:
+    new_module = module_id not in done
+    if new_module:
         done.append(module_id)
-        awarded = MODULE_POINTS
     state["done"] = done
+
+    new_block = False
+    block = bank.block_for_module(module_id)
+    if (
+        block is not None
+        and block["id"] not in blocks_read
+        and all(m in done for m in block["modules"])
+    ):
+        blocks_read.append(block["id"])
+        new_block = True
+    state["blocks_read"] = blocks_read
 
     idx = bank.module_index(module_id)
     if idx + 1 < len(bank.MODULES):
-        nxt = bank.MODULES[idx + 1]
-        state["current_module"] = nxt["id"]
+        state["current_module"] = bank.MODULES[idx + 1]["id"]
         row.state = state
         await db.commit()
-        if awarded:
-            await _award(db, profile.id, awarded, f"callready module {module_id}", {"module": module_id})
+        if new_module:
+            await _award(db, profile.id, READ_MODULE_POINTS, f"callready read module {module_id}", {"module": module_id})
+        if new_block:
+            await _award(db, profile.id, READ_BLOCK_POINTS, f"callready read block {block['id']}", {"block": block["id"]})
+        if new_module or new_block:
             await db.commit()
-        return build_module_card(nxt, state)
+        return build_module_card(bank.MODULES[idx + 1], state)
 
     # Последний модуль — карточка завершения.
     state["current_module"] = module_id
     row.state = state
     await db.commit()
-    if awarded:
-        await _award(db, profile.id, awarded, f"callready module {module_id}", {"module": module_id})
+    if new_module:
+        await _award(db, profile.id, READ_MODULE_POINTS, f"callready read module {module_id}", {"module": module_id})
+    if new_block:
+        await _award(db, profile.id, READ_BLOCK_POINTS, f"callready read block {block['id']}", {"block": block["id"]})
+    if new_module or new_block:
         await db.commit()
 
     widgets = [
@@ -428,7 +640,7 @@ async def next_module(db: AsyncSession, profile: Profile, module_id: str) -> dic
             + progress_summary(state)
         )}},
         {"buttonList": {"buttons": [
-            _btn("🧠 Grammar practice", "callready_practice"),
+            _btn("🗺 My route", "callready_route"),
             _btn("📈 Progress", "callready_progress"),
             _btn("🏠 Menu", "callready_menu"),
         ]}},
@@ -509,7 +721,7 @@ async def show_task(db: AsyncSession, profile: Profile, topic_idx: int, pos: int
 
 
 async def answer(db: AsyncSession, profile: Profile, topic_idx: int, pos: int, answer_idx: int) -> dict:
-    """Ответ на задание: +1 за первый верный ответ, показать результат."""
+    """Ответ на задание grammar practice (без баллов — это только учёба)."""
     if not (0 <= topic_idx < len(bank.GRAMMAR_TOPICS)):
         return {"text": "Topic not found 🤷"}
     task_ids = bank.GRAMMAR_TOPICS[topic_idx]["tasks"]
@@ -523,19 +735,127 @@ async def answer(db: AsyncSession, profile: Profile, topic_idx: int, pos: int, a
     row = await _get_or_create_progress(db, profile.id)
     state = _state_of(row)
     grammar = dict(state.get("grammar", {}))
-
-    awarded = 0
     if correct and not grammar.get(str(task_id)):
         grammar[str(task_id)] = True
-        awarded = GRAMMAR_POINTS
     state["grammar"] = grammar
     row.state = state
     await db.commit()
-    if awarded:
-        await _award(db, profile.id, awarded, f"callready grammar task {task_id}", {"task_id": task_id})
-        await db.commit()
 
-    return build_feedback_card(topic_idx, pos, correct, task, awarded)
+    return build_feedback_card(topic_idx, pos, correct, task)
+
+
+async def show_mtest(
+    db: AsyncSession, profile: Profile, module_id: str, q_idx: int, score: int,
+) -> dict:
+    """Показать вопрос теста модуля (словарь + грамматика)."""
+    questions = module_test_questions(module_id)
+    if not questions:
+        return {"text": "Module not found 🤷"}
+    if not (0 <= q_idx < len(questions)):
+        q_idx = 0
+    m = bank.module_by_id(module_id)
+    title = f"📝 {m['icon']} {m['title']} — test"
+    return _test_question_card(
+        title, q_idx, len(questions), questions[q_idx], score,
+        "callready_mtest_answer", {"module": module_id},
+    )
+
+
+async def answer_mtest(
+    db: AsyncSession, profile: Profile, module_id: str, q_idx: int, answer_idx: int, score: int,
+) -> dict:
+    """Оценить ответ в тесте модуля; на последнем вопросе — итог и +1 балл."""
+    questions = module_test_questions(module_id)
+    if not questions or not (0 <= q_idx < len(questions)):
+        return {"text": "Module not found 🤷"}
+    question = questions[q_idx]
+    correct = answer_idx == question["correct"]
+    new_score = score + (1 if correct else 0)
+    m = bank.module_by_id(module_id)
+    title = f"📝 {m['icon']} {m['title']} — test"
+
+    if q_idx + 1 < len(questions):
+        return _test_feedback_card(
+            title, q_idx, len(questions), question, correct, new_score,
+            "callready_mtest", {"module": module_id},
+        )
+
+    passed = new_score >= MODULE_TEST_PASS
+    row = await _get_or_create_progress(db, profile.id)
+    state = _state_of(row)
+    awarded = 0
+    if passed:
+        tested = list(state.get("modules_tested", []))
+        if module_id not in tested:
+            tested.append(module_id)
+            state["modules_tested"] = tested
+            awarded = MODULE_TEST_POINTS
+    row.state = state
+    await db.commit()
+    if awarded:
+        await _award(db, profile.id, awarded, f"callready module test {module_id}", {"module": module_id})
+        await db.commit()
+    return _test_result_card(
+        title, passed, new_score, len(questions), MODULE_TEST_PASS, awarded,
+        "callready_module", f"↩ {m['icon']} Module", {"module": module_id},
+    )
+
+
+async def show_btest(
+    db: AsyncSession, profile: Profile, block_id: str, q_idx: int, score: int,
+) -> dict:
+    """Показать вопрос теста блока (6 словарь + 4 грамматика)."""
+    questions = block_test_questions(block_id)
+    if not questions:
+        return {"text": "Block not found 🤷"}
+    if not (0 <= q_idx < len(questions)):
+        q_idx = 0
+    b = bank.block_by_id(block_id)
+    title = f"🏁 {b['title']} — test"
+    return _test_question_card(
+        title, q_idx, len(questions), questions[q_idx], score,
+        "callready_btest_answer", {"block": block_id},
+    )
+
+
+async def answer_btest(
+    db: AsyncSession, profile: Profile, block_id: str, q_idx: int, answer_idx: int, score: int,
+) -> dict:
+    """Оценить ответ в тесте блока; на последнем вопросе — итог и +2 балла."""
+    questions = block_test_questions(block_id)
+    if not questions or not (0 <= q_idx < len(questions)):
+        return {"text": "Block not found 🤷"}
+    question = questions[q_idx]
+    correct = answer_idx == question["correct"]
+    new_score = score + (1 if correct else 0)
+    b = bank.block_by_id(block_id)
+    title = f"🏁 {b['title']} — test"
+
+    if q_idx + 1 < len(questions):
+        return _test_feedback_card(
+            title, q_idx, len(questions), question, correct, new_score,
+            "callready_btest", {"block": block_id},
+        )
+
+    passed = new_score >= BLOCK_TEST_PASS
+    row = await _get_or_create_progress(db, profile.id)
+    state = _state_of(row)
+    awarded = 0
+    if passed:
+        tested = list(state.get("blocks_tested", []))
+        if block_id not in tested:
+            tested.append(block_id)
+            state["blocks_tested"] = tested
+            awarded = BLOCK_TEST_POINTS
+    row.state = state
+    await db.commit()
+    if awarded:
+        await _award(db, profile.id, awarded, f"callready block test {block_id}", {"block": block_id})
+        await db.commit()
+    return _test_result_card(
+        title, passed, new_score, len(questions), BLOCK_TEST_PASS, awarded,
+        "callready_route", "🗺 My route", {},
+    )
 
 
 async def show_progress(db: AsyncSession, profile: Profile) -> dict:

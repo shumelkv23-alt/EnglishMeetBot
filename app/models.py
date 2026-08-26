@@ -996,3 +996,33 @@ class CallreadyProgress(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class LeveledProgress(Base):
+    """Прогресс раздела «English by level» в личке (30. leveled_progress).
+
+    Одна строка на профиль (UNIQUE profile_id). Всё живое состояние раздела лежит
+    в JSONB `state`:
+      - themes_studied: список id изученных тем (дедупликация +1 за тему);
+      - tests_passed: список id пройденных тестов тем (дедупликация +1 за тест).
+    Баллы начисляются в leaderboard_ledger (event_type 'learning') — через
+    leaderboard.award_points.
+    """
+
+    __tablename__ = "leveled_progress"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_leveled_progress_profile"),
+        Index("idx_leveled_progress_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

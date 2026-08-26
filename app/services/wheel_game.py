@@ -26,7 +26,7 @@ from app.config import get_settings
 from app.models import GameSession, Profile
 from app.services import games
 from app.services.chat_sender import patch_message, send_message
-from app.services.word_bank import WORDS
+from app.services.word_bank import WORDS, HANGMAN_WORDS
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,40 @@ def pick_word(rng: random.Random | None = None) -> str:
     rng = rng or random
     pool = [w for w in WORDS if w.isalpha() and 4 <= len(w) <= 10]
     return rng.choice(pool).lower()
+
+
+# Краткая подсказка-объяснение для скрытого слова. Категории берём из HANGMAN_WORDS
+# (тот же банк слов), формулируем человеческой фразой, чтобы участники понимали,
+# что именно загадано, ещё до открытия букв.
+_HINT_PHRASES: dict[str, str] = {
+    "animal": "an animal 🐾",
+    "bird": "a bird 🐦",
+    "insect": "an insect 🐛",
+    "sea animal": "a sea animal 🌊",
+    "sweet food": "something sweet 🍬",
+    "drink": "a drink 🥤",
+    "fruit or vegetable": "a fruit or vegetable 🍎",
+    "food": "something to eat 🍽️",
+    "metal tool": "a tool 🛠️",
+    "furniture": "furniture 🪑",
+    "household item": "a household item 🏠",
+    "place at home": "a place at home 🏡",
+    "city place": "a place in the city 🏙️",
+    "place in nature": "a place in nature 🌳",
+    "transport": "a means of transport 🚗",
+    "profession": "a profession 👩‍💼",
+    "body part": "a body part 👤",
+    "clothing": "an item of clothing 👕",
+    "action": "an action (verb) 🏃",
+    "quality": "a quality (adjective) ✨",
+    "nature": "something in nature 🌿",
+}
+
+
+def word_hint(word: str) -> str:
+    """Человекочитаемая подсказка к скрытому слову (категория из банка слов)."""
+    category = HANGMAN_WORDS.get(word.lower(), "")
+    return _HINT_PHRASES.get(category, "a common English word")
 
 
 def spin_wheel(rng: random.Random | None = None):
@@ -130,6 +164,7 @@ def build_wheel_card(state: dict, names: dict[str, str], game_id: int) -> dict:
 
         widgets = [
             {"textParagraph": {"text": f"**{word_text}**"}},
+            {"textParagraph": {"text": f"💡 It's {word_hint(state.get('word', ''))}."}},
             {"textParagraph": {"text": used_text}},
             {"textParagraph": {"text": "\n".join(score_lines)}},
         ]
@@ -293,13 +328,13 @@ async def wheel_spin(db: AsyncSession, game_id: int, user_id: str) -> dict:
     if not players or turn >= len(players):
         return {"text": "Game over 🏁"}
     current = players[turn]
-    names = await games._resolve_names(db, players)
 
     if user_id != current:
-        return {"text": f"It's {names.get(current, current)}'s turn 🙂"}
+        return {}
     if state.get("spin") is not None:
         return {"text": "You already spun — write a letter or the whole word 😉"}
 
+    names = await games._resolve_names(db, players)
     result = spin_wheel()
     if result == "bankrupt":
         state["scores"][current] = 0
@@ -339,13 +374,13 @@ async def wheel_guess(
     current = current_player(state)
     if not current:
         return {"text": "Game over 🏁"}
-    names = await games._resolve_names(db, players)
 
     if user_id != current:
-        return {"text": f"It's {names.get(current, current)}'s turn — wait for yours 🙂"}
+        return {}
     if state.get("spin") is None:
         return {"text": "🎡 Spin the wheel first!"}
 
+    names = await games._resolve_names(db, players)
     guess = games._first_form_value(form_inputs or {}, "guess").lower().strip()
     if not guess:
         return {"text": "The field is empty — write a letter or the whole word 😊"}
