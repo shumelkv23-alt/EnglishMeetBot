@@ -20,14 +20,10 @@ class Settings(BaseSettings):
     google_sa_key_file: str = "sa-key.json"  # ключ сервисного аккаунта (app-auth, chat.bot)
     chat_test_space: str = ""          # space для ручных проверок проактивной отправки
 
-    # LLM (OpenRouter)
-    openrouter_api_key: str = ""  # ключ OpenRouter; пусто = генерация отключена (банк)
-    llm_model: str = "deepseek/deepseek-chat"  # модель OpenRouter (можно free/дёшево)
-
-    # LLM для игр (Anthropic Messages API — Azati)
-    llm_api_key: str = ""  # x-api-key Azati; пусто = генерация отключена (банк слов)
+    # LLM (Anthropic Messages API — Azati)
+    llm_api_key: str = ""  # x-api-key Azati; пусто = генерация отключена (банк)
     llm_base_url: str = "https://llm.azati.ai"  # база Anthropic Messages API
-    llm_games_model: str = "Azati Fast"  # модель для генерации игрового контента
+    llm_games_model: str = "Azati Fast"  # модель для генерации вопросов/карточек/игр
 
     @property
     def database_url(self) -> str:

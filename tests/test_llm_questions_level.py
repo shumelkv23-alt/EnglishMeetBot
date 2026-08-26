@@ -19,7 +19,7 @@ def test_generate_personal_question_uses_level_prompt(monkeypatch):
             return None
 
         def json(self):
-            return {"choices": [{"message": {"content": json.dumps({"question_text": "Q?"})}}]}
+            return {"content": [{"type": "text", "text": json.dumps({"question_text": "Q?"})}]}
 
     def fake_post(url, json=None, headers=None, timeout=None):
         captured["payload"] = json
@@ -29,7 +29,7 @@ def test_generate_personal_question_uses_level_prompt(monkeypatch):
 
     q = generate_personal_question(["food"], level="C1", api_key="k", model="m")
     assert q == "Q?"
-    system = captured["payload"]["messages"][0]["content"]
+    system = captured["payload"]["system"]
     assert "C1" in system
 
 

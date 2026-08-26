@@ -24,7 +24,7 @@ def test_generate_success(monkeypatch):
                 pass
 
             def json(self):
-                return {"choices": [{"message": {"content": '{"question_text": "Хобби?"}'}}]}
+                return {"content": [{"type": "text", "text": '{"question_text": "Хобби?"}'}]}
 
         return R()
 

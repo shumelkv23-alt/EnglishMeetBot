@@ -13,7 +13,7 @@ def test_generate_personal_question_sends_theme(monkeypatch):
             return None
 
         def json(self):
-            return {"choices": [{"message": {"content": json.dumps({"question_text": "Q?"})}}]}
+            return {"content": [{"type": "text", "text": json.dumps({"question_text": "Q?"})}]}
 
     def fake_post(url, json=None, headers=None, timeout=None):
         captured["payload"] = json
@@ -21,7 +21,7 @@ def test_generate_personal_question_sends_theme(monkeypatch):
 
     monkeypatch.setattr("app.services.llm_questions.requests.post", fake_post)
     generate_personal_question(["food"], level="B1", theme="Travel and places", api_key="k", model="m")
-    user_prompt = captured["payload"]["messages"][1]["content"]
+    user_prompt = captured["payload"]["messages"][0]["content"]
     assert "Travel and places" in user_prompt
 
 
