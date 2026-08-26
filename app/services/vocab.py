@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cards.generator.llm import _call_llm, _parse_json
 from app.config import get_settings
+from app.messaging import send_message
 from app.models import MeetingInstance, Profile
-from app.services.chat_sender import send_message
+from app.schemas import MessagePayload
 from app.services.levels import CEFR_LEVELS
 
 logger = logging.getLogger(__name__)
@@ -127,16 +128,15 @@ async def send_vocab_dms(
     sent = 0
     for level, group in _group_level(profiles).items():
         phrases = await generate_vocab(level, topic)
-        card = build_vocab_card(topic, phrases)
+        payload = MessagePayload(
+            text=f"📚 Vocabulary for today: {topic}",
+            card=build_vocab_card(topic, phrases),
+        )
         for p in group:
             if not p.workspace_user_id:
                 continue
             try:
-                await asyncio.to_thread(
-                    send_message, p.workspace_user_id,
-                    text=f"📚 Vocabulary for today: {topic}",
-                    cards_v2=card["cardsV2"],
-                )
+                await asyncio.to_thread(send_message, p.workspace_user_id, payload)
                 sent += 1
             except Exception:
                 logger.exception("vocab_dm_failed profile=%s", p.id)
