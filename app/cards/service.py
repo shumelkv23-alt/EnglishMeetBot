@@ -1,0 +1,455 @@
+"""Оркестрация пайплайна карточек (ТЗ §6.1) + рендер + планирование джобов.
+
+Пайплайн: собрать контекст → ротация типа → сложность → контент (шаблон/LLM)
+→ подбор активности → валидация → сохранение → рендер → отправка в группу.
+"""
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.cards.activity_matcher import game_by_id, match_activity
+from app.cards.catalog import BANK_ONLY_TYPES
+from app.cards.generator.llm import generate_llm_content
+from app.cards.generator.template import build_template_content, pick_bank_payload
+from app.cards.models import Card, CardType
+from app.cards.rotation import select_card_type
+from app.cards.validator import validate_card
+from app.config import get_settings
+from app.database import AsyncSessionLocal
+from app.models import Answer, Config, MeetingInstance, PollVote, Profile
+from app.services.chat_sender import send_message
+from app.services.onboarding import ONBOARDING_QUESTION
+from app.services.onboarding_answers import QUESTIONS as ONBOARDING_QUESTIONS
+
+logger = logging.getLogger(__name__)
+
+_EXCLUDED_QUESTIONS = frozenset([ONBOARDING_QUESTION, *ONBOARDING_QUESTIONS.values()])
+_RECENT_DAYS = 7
+DEFAULT_LEAD_MINUTES = 60
+
+CEFR_ORDER = {"A1": 0, "A2": 1, "B1": 2, "B2": 3, "C1": 4, "C2": 5}
+
+TYPE_TITLES = {
+    "topic": "Topic Discussion",
+    "debate": "Debate",
+    "storytelling": "Storytelling Chain",
+    "would_you_rather": "Would You Rather",
+    "roleplay": "Roleplay",
+    "culture": "Culture & Idiom",
+    "hot_seat": "Hot Seat",
+    "game_day": "Game Day",
+    "two_truths": "Two Truths & a Lie",
+    "mystery": "Mystery Topic",
+    "news_reaction": "News Reaction",
+    "time_capsule": "Time Capsule",
+}
+
+_HEADER_ICON_URL = "https://fonts.gstatic.com/s/i/googlematerialicons/spark/v1/24px.svg"
+
+
+def card_at(scheduled_start: datetime, lead_minutes: int) -> datetime:
+    """Момент отправки карточки = встреча минус lead_minutes."""
+    return scheduled_start - timedelta(minutes=lead_minutes)
+
+
+def card_job_id(instance_id: str) -> str:
+    """id джоба карточки (перезапись при повторной постановке)."""
+    return f"card_{instance_id}"
+
+
+async def _config_value(db: AsyncSession, key: str, default=None):
+    cfg = (await db.execute(select(Config).where(Config.key == key))).scalar_one_or_none()
+    return cfg.value if cfg is not None else default
+
+
+async def _attendee_profiles(db: AsyncSession, meeting: MeetingInstance) -> list[Profile]:
+    """Профили, проголосовавшие за выбранный слот встречи."""
+    rows = (
+        await db.execute(
+            select(Profile)
+            .join(PollVote, PollVote.profile_id == Profile.id)
+            .where(PollVote.poll_slot_id == meeting.selected_slot_id)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def _recent_answers(db: AsyncSession, profile_ids: list[int]) -> list[Answer]:
+    """Публичные (с согласия) ответы на вопросы недели за последние 7 дней."""
+    if not profile_ids:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_RECENT_DAYS)
+    rows = (
+        await db.execute(
+            select(Answer).where(
+                Answer.profile_id.in_(profile_ids),
+                Answer.is_public.is_(True),
+                Answer.answered_at >= cutoff,
+                Answer.answer_text.isnot(None),
+                Answer.question_text.isnot(None),
+                Answer.question_text.notin_(_EXCLUDED_QUESTIONS),
+            )
+            .order_by(Answer.profile_id, Answer.answered_at)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+def _build_context(profiles: list[Profile], answers: list[Answer]) -> str:
+    """Строковый контекст участников для LLM: «Имя (уровень): ответ» (анонимно)."""
+    profiles_by_id = {p.id: p for p in profiles}
+    lines: list[str] = []
+    for idx, a in enumerate(answers, 1):
+        p = profiles_by_id.get(a.profile_id)
+        if p is None:
+            continue
+        name = f"participant {idx}" if p.anonymize_answers else (p.user_name or f"participant {idx}")
+        level = f" ({p.english_level})" if p.english_level else ""
+        lines.append(f"{name}{level}: {(a.answer_text or '').strip()}")
+    return "\n".join(lines) or "no participant answers"
+
+
+async def _active_card_types(db: AsyncSession) -> list[CardType]:
+    rows = (
+        await db.execute(select(CardType).where(CardType.is_active.is_(True)))
+    ).scalars().all()
+    return list(rows)
+
+
+async def _history(db: AsyncSession, space_id: str) -> list[tuple[str, datetime]]:
+    """История (card_type_name, created_at) для ротации."""
+    rows = (
+        await db.execute(
+            select(CardType.name, Card.created_at)
+            .join(Card, Card.card_type_id == CardType.id)
+            .where(Card.space_id == space_id)
+            .order_by(Card.created_at)
+        )
+    ).all()
+    return [(name, ts) for name, ts in rows]
+
+
+def _group_difficulty(profiles: list[Profile], card_type: CardType) -> str:
+    """Уровень группы = минимальный CEFR участников, клампится в диапазон типа."""
+    levels = [p.english_level for p in profiles if p.english_level in CEFR_ORDER]
+    if not levels:
+        return card_type.cefr_min or "A2"
+    level = min(levels, key=CEFR_ORDER.get)
+    if CEFR_ORDER[level] < CEFR_ORDER.get(card_type.cefr_min, "A2"):
+        return card_type.cefr_min
+    if CEFR_ORDER[level] > CEFR_ORDER.get(card_type.cefr_max, "C1"):
+        return card_type.cefr_max
+    return level
+
+
+def _assemble_card(card_type: CardType, difficulty: str, content: dict, generated_by: str) -> dict:
+    """Собрать полный card_content из контента + suggested_activity."""
+    topic = content["main_content"].get("topic", "")
+    if card_type.name == "game_day":
+        aid = (content["main_content"].get("type_specific_payload") or {}).get("activity_id")
+        game = game_by_id(aid)
+        suggested = (
+            {"activity_id": game["activity_id"], "activity_type": game["activity_type"],
+             "relevance_reason": "the game is the center of this card"}
+            if game else match_activity(topic)
+        )
+    else:
+        suggested = match_activity(topic)
+    return {
+        "card_type": card_type.name,
+        "difficulty_level": difficulty,
+        "warm_up": content.get("warm_up"),
+        "main_content": content["main_content"],
+        "vocab_box": content.get("vocab_box", []),
+        "suggested_activity": suggested,
+        "stretch_challenge": None,
+        "wrap_up_question": content.get("wrap_up_question"),
+        "meta": {
+            "generated_by": generated_by,
+            "safety_tier": card_type.safety_tier,
+            "rotation_tag": card_type.name,
+        },
+    }
+
+
+async def generate_card_content(
+    db: AsyncSession, meeting: MeetingInstance, space_id: str
+) -> tuple[CardType, dict]:
+    """Полный пайплайн генерации карточки. Возвращает (тип, content-словарь)."""
+    profiles = await _attendee_profiles(db, meeting)
+    answers = await _recent_answers(db, [p.id for p in profiles])
+    context = _build_context(profiles, answers)
+
+    card_type = select_card_type(await _active_card_types(db), await _history(db, space_id))
+    if card_type is None:
+        raise RuntimeError("no active card types")
+
+    difficulty = _group_difficulty(profiles, card_type)
+
+    bank_payload = await pick_bank_payload(db, card_type.id)
+    content = build_template_content(card_type.name, bank_payload, difficulty)
+    generated_by = "template"
+
+    # Tier 1: пробуем LLM (персонализация по ответам), fallback — шаблон.
+    if card_type.name not in BANK_ONLY_TYPES:
+        llm = await generate_llm_content(card_type.name, difficulty, context)
+        if llm:
+            content["main_content"]["topic"] = llm["topic"]
+            content["main_content"]["sub_questions"] = llm["sub_questions"]
+            content["vocab_box"] = llm["vocab_box"]
+            content["wrap_up_question"] = llm["wrap_up_question"]
+            generated_by = "llm"
+
+    card_content = _assemble_card(card_type, difficulty, content, generated_by)
+
+    errors = validate_card(card_content)
+    if errors:
+        # Не прошло валидацию — откатываемся на чистый шаблон (LLM-контент не должен протечь).
+        logger.warning("card_validation_failed type=%s errors=%s", card_type.name, errors)
+        content = build_template_content(card_type.name, bank_payload, difficulty)
+        card_content = _assemble_card(card_type, difficulty, content, "template")
+
+    db.add(Card(
+        space_id=space_id,
+        meeting_id=meeting.id,
+        card_type_id=card_type.id,
+        difficulty_level=difficulty,
+        content=card_content,
+        generated_by=card_content["meta"]["generated_by"],
+    ))
+    await db.commit()
+    logger.info(
+        "card_generated meeting=%s type=%s generated_by=%s",
+        meeting.id, card_type.name, card_content["meta"]["generated_by"],
+    )
+    return card_type, card_content
+
+
+def build_card_message(content: dict, scheduled_start: datetime | None = None) -> dict:
+    """Рендер карточки в формат Google Chat (cardsV2)."""
+    topic = str((content.get("main_content") or {}).get("topic") or "Conversation").strip()
+    card_type = content.get("card_type", "topic")
+
+    subtitle = ""
+    if scheduled_start is not None:
+        tz = ZoneInfo(get_settings().app_timezone)
+        if scheduled_start.tzinfo is None:
+            scheduled_start = scheduled_start.replace(tzinfo=tz)
+        subtitle = "See you at " + scheduled_start.astimezone(tz).strftime("%a %H:%M")
+
+    header: dict = {
+        "title": f"{TYPE_TITLES.get(card_type, 'Activity')} · {topic}",
+        "imageUrl": _HEADER_ICON_URL,
+        "imageType": "CIRCLE",
+        "imageAltText": TYPE_TITLES.get(card_type, "Activity"),
+    }
+    if subtitle:
+        header["subtitle"] = subtitle
+
+    sections: list[dict] = []
+
+    warm = content.get("warm_up") or {}
+    if warm.get("question"):
+        sections.append({
+            "header": "🔥 Warm-up",
+            "widgets": [{"decoratedText": {"text": warm["question"], "wrapText": True}}],
+        })
+
+    main = content.get("main_content") or {}
+    sections.extend(_main_sections(main))
+
+    vocab = content.get("vocab_box") or []
+    if vocab:
+        sections.append({
+            "header": "💡 Useful phrases",
+            "widgets": [
+                {"decoratedText": {"topLabel": v.get("phrase", ""),
+                                   "text": v.get("example") or v.get("translation") or "", "wrapText": True}}
+                for v in vocab
+            ],
+        })
+
+    suggested = content.get("suggested_activity") or {}
+    if suggested.get("activity_id"):
+        name = suggested["activity_id"].replace("_", " ").title()
+        sections.append({
+            "header": "🎮 Suggested activity",
+            "widgets": [{"decoratedText": {"text": f"{name} — {suggested.get('relevance_reason', '')}", "wrapText": True}}],
+        })
+
+    wrap = content.get("wrap_up_question")
+    if wrap:
+        sections.append({
+            "header": "🧭 Wrap-up",
+            "widgets": [{"decoratedText": {"text": wrap, "wrapText": True}}],
+        })
+
+    sections.append({"widgets": [{"divider": {}}, {"textParagraph": {"text": "Have a great conversation! 🚀"}}]})
+
+    return {
+        "cardsV2": [{
+            "cardId": "activityCard",
+            "card": {"header": header, "sections": sections},
+        }]
+    }
+
+
+def _main_sections(main: dict) -> list[dict]:
+    """Секции основного контента в зависимости от type_specific_payload."""
+    sections: list[dict] = []
+    payload = main.get("type_specific_payload") or {}
+
+    if payload.get("option_a") and payload.get("option_b"):
+        sections.append({
+            "header": "A or B?",
+            "widgets": [
+                {"decoratedText": {"topLabel": "A", "text": payload["option_a"], "wrapText": True}},
+                {"decoratedText": {"topLabel": "B", "text": payload["option_b"], "wrapText": True}},
+            ],
+        })
+    if payload.get("scenario"):
+        roles = payload.get("roles")
+        roles = ", ".join(roles) if isinstance(roles, list) else (roles or "two roles")
+        sections.append({
+            "header": "🎭 Scenario",
+            "widgets": [
+                {"decoratedText": {"text": payload["scenario"], "wrapText": True}},
+                {"decoratedText": {"topLabel": "Roles", "text": roles, "wrapText": True}},
+            ],
+        })
+    if payload.get("statement"):
+        sides = payload.get("sides")
+        sides = " vs ".join(sides) if isinstance(sides, list) else (sides or "For / Against")
+        sections.append({
+            "header": "⚖️ Statement",
+            "widgets": [
+                {"decoratedText": {"text": payload["statement"], "wrapText": True}},
+                {"decoratedText": {"topLabel": "Sides", "text": sides, "wrapText": True}},
+            ],
+        })
+    if payload.get("headline"):
+        summary = payload.get("summary") or ""
+        sections.append({
+            "header": "📰 In the news",
+            "widgets": [
+                {"decoratedText": {"topLabel": "Headline", "text": payload["headline"], "wrapText": True}},
+                {"decoratedText": {"text": summary, "wrapText": True}},
+            ],
+        })
+    if payload.get("starter_sentence"):
+        sections.append({
+            "header": "📖 Story starter",
+            "widgets": [{"decoratedText": {"text": payload["starter_sentence"], "wrapText": True}}],
+        })
+    if payload.get("idiom"):
+        sections.append({
+            "header": "🗣️ Idiom",
+            "widgets": [
+                {"decoratedText": {"topLabel": "Meaning", "text": payload.get("meaning", ""), "wrapText": True}},
+                {"decoratedText": {"text": f"“{payload.get('example', '')}”", "wrapText": True}},
+            ],
+        })
+    if payload.get("prompt"):
+        sections.append({
+            "header": "⏳ Prompt",
+            "widgets": [{"decoratedText": {"text": payload["prompt"], "wrapText": True}}],
+        })
+
+    sub = main.get("sub_questions") or []
+    if sub:
+        sections.append({
+            "header": "💬 Questions",
+            "widgets": [
+                {"decoratedText": {"topLabel": f"{i}. {q.get('level', '')}".strip(" ."),
+                                   "text": q.get("text", ""), "wrapText": True}}
+                for i, q in enumerate(sub, 1)
+            ],
+        })
+    return sections
+
+
+async def send_card(instance_id: str) -> None:
+    """Джоб: сгенерировать и отправить карточку занятия в группу."""
+    async with AsyncSessionLocal() as db:
+        meeting = await db.get(MeetingInstance, int(instance_id))
+        if meeting is None:
+            logger.warning("card_no_meeting instance=%s", instance_id)
+            return
+        if meeting.status != "scheduled":
+            logger.info("card_skipped_status instance=%s status=%s", instance_id, meeting.status)
+            return
+        space_id = await _config_value(db, "space_id", "") or ""
+        if not space_id:
+            logger.warning("card_no_space instance=%s", instance_id)
+            return
+
+        card_type, content = await generate_card_content(db, meeting, space_id)
+        card = build_card_message(content, meeting.scheduled_start)
+        await asyncio.to_thread(
+            send_message,
+            space_id,
+            text=f"📚 Today's activity — {TYPE_TITLES.get(card_type.name, 'Activity')}:",
+            cards_v2=card["cardsV2"],
+        )
+        logger.info("card_sent instance=%s type=%s", instance_id, card_type.name)
+
+
+async def schedule_card_for_meeting(
+    db: AsyncSession, instance_id: int, scheduled_start: datetime
+) -> None:
+    """Поставить джоб карточки на время встречи (при финализации)."""
+    from app.scheduler import scheduler
+
+    if scheduler is None or scheduled_start is None:
+        return
+    lead = int(await _config_value(db, "card_lead_minutes", DEFAULT_LEAD_MINUTES) or DEFAULT_LEAD_MINUTES)
+    run_at = card_at(scheduled_start, lead)
+    scheduler.add_job(
+        send_card,
+        "date",
+        run_date=run_at,
+        id=card_job_id(str(instance_id)),
+        replace_existing=True,
+        misfire_grace_time=lead * 60,
+        args=[str(instance_id)],
+    )
+    logger.info("card_scheduled instance=%s at=%s", instance_id, run_at)
+
+
+async def restore_cards_on_startup() -> int:
+    """Пересоздать джобы карточек для будущих встреч после рестарта."""
+    from app.scheduler import scheduler
+
+    if scheduler is None:
+        return 0
+    async with AsyncSessionLocal() as db:
+        meetings = (
+            await db.execute(
+                select(MeetingInstance).where(
+                    MeetingInstance.status == "scheduled",
+                    MeetingInstance.scheduled_start.isnot(None),
+                )
+            )
+        ).scalars().all()
+        lead = int(await _config_value(db, "card_lead_minutes", DEFAULT_LEAD_MINUTES) or DEFAULT_LEAD_MINUTES)
+
+    now = datetime.now(timezone.utc)
+    restored = 0
+    for m in meetings:
+        if m.scheduled_start <= now:
+            continue  # встреча уже прошла
+        run_at = card_at(m.scheduled_start, lead)
+        if run_at <= now:
+            run_at = now + timedelta(seconds=10)  # карточка должна была уйти — шлём сразу
+        scheduler.add_job(
+            send_card, "date", run_date=run_at,
+            id=card_job_id(str(m.id)), replace_existing=True,
+            args=[str(m.id)],
+        )
+        restored += 1
+    logger.info("cards_restored count=%s", restored)
+    return restored

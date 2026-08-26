@@ -24,11 +24,14 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Starting up application in {settings.app_env} mode...")
     await init_scheduler()
+    from app.cards.seed import ensure_seeded
     from app.services.reminders import restore_reminders_on_startup
-    from app.services.briefing import restore_briefings_on_startup
+    from app.cards.service import restore_cards_on_startup
 
+    # Идемпотентный сид каталога карточек + контент-банка (на чистой БД иначе пусто).
+    await ensure_seeded()
     await restore_reminders_on_startup()
-    await restore_briefings_on_startup()
+    await restore_cards_on_startup()
     yield
     shutdown_scheduler()
     logger.info("Shutting down application...")
