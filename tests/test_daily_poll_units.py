@@ -73,7 +73,7 @@ def test_week_monday_returns_monday():
 
 
 def test_build_weekly_poll_card_sections_and_buttons():
-    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook")
+    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", today_dow=0)
     sections = card["cardsV2"][0]["card"]["sections"]
     assert len(sections) == 2
     assert sections[0]["header"] == "Mon · 0 voted"
@@ -87,7 +87,7 @@ def test_build_weekly_poll_card_sections_and_buttons():
 
 def test_build_weekly_poll_card_shows_counts():
     counts = {(0, "15:00"): 4, (0, "16:00"): 2, (1, "15:00"): 1}
-    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", counts)
+    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", counts, today_dow=0)
     sections = card["cardsV2"][0]["card"]["sections"]
     assert sections[0]["header"] == "Mon · 6 voted"
     buttons = sections[0]["widgets"][0]["buttonList"]["buttons"]
