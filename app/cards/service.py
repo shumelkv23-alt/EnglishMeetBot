@@ -382,6 +382,12 @@ async def send_card(instance_id: str) -> None:
         if meeting.status != "scheduled":
             logger.info("card_skipped_status instance=%s status=%s", instance_id, meeting.status)
             return
+        existing = (
+            await db.execute(select(Card).where(Card.meeting_id == meeting.id))
+        ).scalars().first()
+        if existing is not None:
+            logger.info("card_skip_exists instance=%s", instance_id)
+            return
         space_id = await _config_value(db, "space_id", "") or ""
         if not space_id:
             logger.warning("card_no_space instance=%s", instance_id)
@@ -396,6 +402,13 @@ async def send_card(instance_id: str) -> None:
             cards_v2=card["cardsV2"],
         )
         logger.info("card_sent instance=%s type=%s", instance_id, card_type.name)
+
+        # Персональная лексика в личку участникам (по уровню).
+        from app.services.vocab import send_vocab_dms
+
+        profiles = await _attendee_profiles(db, meeting)
+        topic = str((content.get("main_content") or {}).get("topic") or "today's topic")
+        await send_vocab_dms(db, meeting, topic, profiles)
 
 
 async def schedule_card_for_meeting(
