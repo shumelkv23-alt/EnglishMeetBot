@@ -55,17 +55,27 @@ def _is_valid_submit_time(choice: str) -> bool:
 
 
 def build_weekly_poll_card(
-    days: list[int], times: list[str], action_url: str, counts: dict[tuple[int, str], int] | None = None,
+    days: list[int], times: list[str], action_url: str,
+    counts: dict[tuple[int, str], int] | None = None, today_dow: int | None = None,
 ) -> dict:
     """Карточка недельного опроса: по секции на день, кнопки времени со счётчиками.
 
     counts — {(day_of_week, "HH:MM"): N}; None → все нули.
+    today_dow — индекс сегодняшнего дня (по таймзоне приложения); дни раньше — без кнопок.
     """
     counts = counts or {}
+    if today_dow is None:
+        today_dow = datetime.now(ZoneInfo(get_settings().app_timezone)).weekday()
     sections = []
     for day in days:
         day_name = DAYS[day]
         total = sum(counts.get((day, t), 0) for t in times)
+        if day < today_dow:
+            sections.append({
+                "header": f"{day_name} · passed",
+                "widgets": [{"textParagraph": {"text": "This day has passed"}}],
+            })
+            continue
         buttons = []
         for t in times:
             c = counts.get((day, t), 0)
@@ -217,6 +227,9 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
         return {"ok": False, "reason": "closed"}
 
     day, choice = _normalize_submit(form_inputs)
+    today_dow = datetime.now(ZoneInfo(get_settings().app_timezone)).weekday()
+    if day < today_dow:
+        return {"ok": False, "reason": "past_day"}
     if day < 0 or not _is_valid_submit_time(choice):
         return {"ok": False, "reason": "empty"}
 
