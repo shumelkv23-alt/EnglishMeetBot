@@ -191,11 +191,14 @@ async def scheduled_slots(db: AsyncSession, week_start: date) -> set[tuple[str, 
     """Слоты недели, где встреча уже собрана: {(day, time)}."""
     start = datetime.combine(week_start, time(0, 0), tzinfo=APP_TZ)
     end = start + timedelta(days=7)
+    # Только встречи недельного расписания (activity_type IS NULL). Игры
+    # (quiplash/who_am_i и т.п.) в таблицу «собранных» слотов попадать не должны.
     rows = (
         await db.execute(select(MeetingInstance.scheduled_start).where(
             MeetingInstance.status == "scheduled",
             MeetingInstance.scheduled_start >= start,
             MeetingInstance.scheduled_start < end,
+            MeetingInstance.activity_type.is_(None),
         ))
     ).scalars().all()
     out: set[tuple[str, str]] = set()
@@ -242,8 +245,14 @@ async def toggle_weekly_vote(db: AsyncSession, profile: Profile, day: str, time:
         ))
     ).scalar_one_or_none()
     if existing is not None:
-        await db.delete(existing)
-        action = "removed"
+        if existing.time == time:
+            # Клик по своему же времени — снять голос.
+            await db.delete(existing)
+            action = "removed"
+        else:
+            # Клик по другому времени того же дня — перенести голос (а не удалить).
+            existing.time = time
+            action = "moved"
     else:
         db.add(WeeklyAvailabilityVote(
             poll_id=poll.id, profile_id=profile.id, day=day, time=time,
@@ -292,24 +301,24 @@ async def next_vote_after(db: AsyncSession, profile_id: int, after_date: date) -
     return None
 
 
-async def schedule_tomorrow_meetings(db: AsyncSession, now: datetime | None = None) -> dict | None:
-    """Собрать встречу на завтра, если набрался кворум в одно время.
+async def schedule_today_meetings(db: AsyncSession, now: datetime | None = None) -> dict | None:
+    """Собрать встречу на сегодня, если набрался кворум в одно время.
 
-    Берёт самое популярное время с >= quorum голосов; материализует
+    Берёт самое популярное время с >= quorum голосов за СЕГОДНЯ (только слоты,
+    которые ещё впереди по времени); материализует
     DailyPoll/PollSlot/PollResponse/PollVote/MeetingInstance, чтобы дальше
     работал существующий пайплайн (handle_time_finalized → приглашения,
     напоминание, чек-ин). Возвращает dict или None, если встречи не будет.
     """
     tz_now = _now_tz(now)
     today = tz_now.date()
-    tomorrow = today + timedelta(days=1)
-    day_code = DAYS_ALL[tomorrow.weekday()]
+    day_code = DAYS_ALL[today.weekday()]
     days = await weekly_days(db)
     if day_code not in days:
         return None
 
     existing = (
-        await db.execute(select(DailyPoll).where(DailyPoll.poll_date == tomorrow))
+        await db.execute(select(DailyPoll).where(DailyPoll.poll_date == today))
     ).scalar_one_or_none()
     if existing is not None:
         return None  # уже отработано (идемпотентность при рестарте)
@@ -318,20 +327,22 @@ async def schedule_tomorrow_meetings(db: AsyncSession, now: datetime | None = No
     votes = await votes_by_day_time(db, poll.id)
     quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
 
+    # Только слоты сегодняшнего дня, которые ещё впереди (не ушедшие по времени).
+    now_minutes = tz_now.hour * 60 + tz_now.minute
     candidates = {
         t: pids for (d, t), pids in votes.items()
-        if d == day_code and len(pids) >= quorum
+        if d == day_code and len(pids) >= quorum and _minutes(t) > now_minutes
     }
     if not candidates:
         return None
 
     best_time = max(candidates, key=lambda t: (len(candidates[t]), _time_rank(t)))
     participant_ids = candidates[best_time]
-    slot_start = datetime.combine(tomorrow, _parse_time(best_time), tzinfo=APP_TZ)
+    slot_start = datetime.combine(today, _parse_time(best_time), tzinfo=APP_TZ)
 
     daily = DailyPoll(
-        poll_date=tomorrow,
-        voting_deadline=datetime.combine(tomorrow, time(0, 0), tzinfo=APP_TZ),
+        poll_date=today,
+        voting_deadline=datetime.combine(today, time(0, 0), tzinfo=APP_TZ),
         status="finalized",
         closed_at=datetime.now(timezone.utc),
     )
@@ -372,7 +383,7 @@ async def schedule_tomorrow_meetings(db: AsyncSession, now: datetime | None = No
 
     logger.info(
         "weekly_meeting_scheduled day=%s time=%s participants=%s meeting=%s",
-        tomorrow, best_time, len(participant_ids), meeting.id,
+        today, best_time, len(participant_ids), meeting.id,
     )
     return {
         "id": meeting.id,
@@ -393,7 +404,9 @@ async def post_or_refresh_weekly_table(db: AsyncSession, poll: WeeklyPoll, text:
         return None
     card = await build_card_for_poll(db, poll, get_settings().chat_app_audience)
     cards_v2 = card["cardsV2"]
-    if poll.poll_message_name:
+    # Обновляем на месте только если сохранённое сообщение принадлежит текущей группе.
+    # Иначе (бота добавили в другую группу, space_id сменился) — постим новую таблицу.
+    if poll.poll_message_name and poll.poll_message_name.startswith(f"{space_id}/messages/"):
         try:
             return patch_message(poll.poll_message_name, cards_v2=cards_v2)
         except Exception:

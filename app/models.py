@@ -737,7 +737,7 @@ class GameSession(Base):
     __tablename__ = "game_sessions"
     __table_args__ = (
         CheckConstraint(
-            "game_type IN ('who_am_i', 'quiplash', 'hangman', 'millionaire', 'wordle', 'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', 'spy', 'guesspionage')",
+            "game_type IN ('who_am_i', 'quiplash', 'hangman', 'millionaire', 'wordle', 'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', 'spy', 'guesspionage', 'wheel')",
             name="valid_game_type",
         ),
         CheckConstraint(
@@ -923,6 +923,73 @@ class WordleScore(Base):
     best_guesses: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0"), nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class LessonSession(Base):
+    """Сгенерированная «занятие-карточка» для встречи (28. lesson_sessions).
+
+    Одна запись = одна сгенерированная тема + план занятия (LLM или банк).
+    Хранит полный контент карточки и имя сообщения в группе (для обновления
+    карточки на месте при reroll). Использованные темы — это отдельные строки
+    таблицы, по ним дедуплицируем при генерации новой карточки.
+    """
+
+    __tablename__ = "lesson_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "format IN ('discussion', 'debate', 'four_hats', 'roleplay', 'ranking', "
+            "'would_you_rather', 'story', 'taboo', 'dilemma', 'speed_dating')",
+            name="valid_lesson_format",
+        ),
+        Index("idx_lesson_sessions_meeting", "meeting_instance_id"),
+        Index("idx_lesson_sessions_topic", "topic"),
+        Index("idx_lesson_sessions_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    meeting_instance_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("meeting_instances.id")
+    )
+    topic: Mapped[str] = mapped_column(String(255), nullable=False)
+    format: Mapped[str] = mapped_column(String(50), nullable=False)
+    level: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    message_name: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CallreadyProgress(Base):
+    """Прогресс курса «Survival English for Calls» в личке (29. callready_progress).
+
+    Одна строка на профиль (UNIQUE profile_id). Всё живое состояние курса лежит
+    в JSONB `state`:
+      - current_module: id последнего открытого модуля (для «продолжить»);
+      - done: список id завершённых модулей (дедупликация начисления баллов);
+      - grammar: {id_задания: True} — верно отвеченные грамматические задания;
+      - phrasebook_seen: список просмотренных категорий фразбука.
+    Баллы начисляются в leaderboard_ledger (event_type 'learning', +10 за модуль,
+    +1 за верный грамматический ответ) — через leaderboard.award_points.
+    """
+
+    __tablename__ = "callready_progress"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_callready_progress_profile"),
+        Index("idx_callready_progress_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

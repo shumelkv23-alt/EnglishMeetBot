@@ -84,23 +84,43 @@ async def _run_weekly_table() -> None:
 
 
 async def _run_weekly_check() -> None:
-    """Джоб ежедневно 15:00 — собрать встречу на завтра, если набрался кворум."""
+    """Джоб ежедневно 13:00 — собрать встречу на сегодня, если набрался кворум."""
     from app.services.invites import handle_time_finalized
     from app.services.weekly_availability import (
+        day_code_of,
         ensure_weekly_poll,
         post_or_refresh_weekly_table,
-        schedule_tomorrow_meetings,
+        schedule_today_meetings,
+        weekly_days,
     )
+    from app.services.weekly_poll import get_or_create_config
 
     async with AsyncSessionLocal() as db:
-        meeting = await schedule_tomorrow_meetings(db)
+        meeting = await schedule_today_meetings(db)
         if meeting is None:
+            # «Не набирается» объявляем только в рабочие дни (пн..пт).
+            days = await weekly_days(db)
+            if day_code_of(datetime.now(APP_TZ).date()) in days:
+                space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+                if space_id:
+                    send_space_message(space_id, text="Сегодня встреча не набирается 😕")
             logger.info("weekly_check_job no_meeting")
             return
         await handle_time_finalized(
             db, meeting["id"], meeting["day"], meeting["time"],
             activity=None, scheduled_start=meeting["scheduled_start"],
         )
+        # Карточка занятия (тема + план): генерация + пост в группу.
+        space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+        if space_id:
+            try:
+                from app.services.lesson_plan import generate_and_post_lesson
+
+                await generate_and_post_lesson(
+                    db, meeting["id"], space_id, get_settings().chat_app_audience
+                )
+            except Exception:
+                logger.exception("lesson_generate_post_failed meeting=%s", meeting["id"])
         # Пометить слот ✅ в таблице группы.
         poll = await ensure_weekly_poll(db)
         await post_or_refresh_weekly_table(db, poll)
@@ -176,7 +196,7 @@ def init_scheduler() -> None:
     scheduler.add_job(
         _run_weekly_check,
         "cron",
-        hour=15,
+        hour=13,
         minute=0,
         id="weekly-check",
         replace_existing=True,
