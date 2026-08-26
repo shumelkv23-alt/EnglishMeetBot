@@ -23,6 +23,21 @@ _WRAP_UP_POOL = [
     "What would you like to talk about next time?",
 ]
 
+_STRETCH_BY_TYPE = {
+    "topic": "Go deeper: argue the opposite side of your own answer for a minute.",
+    "debate": "Switch sides and defend the position you disagree with.",
+    "storytelling": "Add an unexpected plot twist to the story.",
+    "would_you_rather": "Argue for the option you did NOT choose.",
+    "roleplay": "Swap roles and replay the scene.",
+    "culture": "Teach a phrase from your own language that has no English equivalent.",
+    "hot_seat": "Ask the person in the hot seat one personal follow-up question.",
+    "game_day": "Invent a quick rule variation for the game you just played.",
+    "two_truths": "Invent a convincing lie about yourself and make the group guess.",
+    "mystery": "Speculate on the weirdest possible answer to today's topic.",
+    "news_reaction": "Predict how this news might look in ten years.",
+    "time_capsule": "Write a one-sentence message your future self would understand.",
+}
+
 
 async def pick_bank_payload(
     db: AsyncSession, card_type_id: int, rng: random.Random | None = None
@@ -59,6 +74,7 @@ def build_template_content(card_type_name: str, payload: dict | None, difficulty
         "warm_up": {"question": random.choice(_WARM_UP_POOL), "based_on_profile_field": None},
         "main_content": main,
         "vocab_box": _vocab_box(card_type_name, payload),
+        "stretch_challenge": _STRETCH_BY_TYPE.get(card_type_name, _STRETCH_BY_TYPE["topic"]),
         "wrap_up_question": random.choice(_WRAP_UP_POOL),
     }
 

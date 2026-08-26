@@ -45,6 +45,7 @@ def _gather_text(content: dict) -> str:
             parts.append(str(v.get("translation") or ""))
             parts.append(str(v.get("example") or ""))
 
+    parts.append(str(content.get("stretch_challenge") or ""))
     parts.append(str(content.get("wrap_up_question") or ""))
     return "\n".join(parts)
 

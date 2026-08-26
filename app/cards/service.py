@@ -166,7 +166,7 @@ def _assemble_card(card_type: CardType, difficulty: str, content: dict, generate
         "main_content": content["main_content"],
         "vocab_box": content.get("vocab_box", []),
         "suggested_activity": suggested,
-        "stretch_challenge": None,
+        "stretch_challenge": content.get("stretch_challenge"),
         "wrap_up_question": content.get("wrap_up_question"),
         "meta": {
             "generated_by": generated_by,
@@ -190,17 +190,23 @@ async def generate_card_content(
 
     difficulty = _group_difficulty(profiles, card_type)
 
+    from app.services.week_theme import week_theme
+    from app.services.weekly_poll import week_monday
+
+    theme = week_theme(week_monday(meeting.scheduled_start.date()))
+
     bank_payload = await pick_bank_payload(db, card_type.id)
     content = build_template_content(card_type.name, bank_payload, difficulty)
     generated_by = "template"
 
     # Tier 1: пробуем LLM (персонализация по ответам), fallback — шаблон.
     if card_type.name not in BANK_ONLY_TYPES:
-        llm = await generate_llm_content(card_type.name, difficulty, context)
+        llm = await generate_llm_content(card_type.name, difficulty, context, theme=theme)
         if llm:
             content["main_content"]["topic"] = llm["topic"]
             content["main_content"]["sub_questions"] = llm["sub_questions"]
             content["vocab_box"] = llm["vocab_box"]
+            content["stretch_challenge"] = llm.get("stretch_challenge") or content["stretch_challenge"]
             content["wrap_up_question"] = llm["wrap_up_question"]
             generated_by = "llm"
 
@@ -255,7 +261,7 @@ def build_card_message(content: dict, scheduled_start: datetime | None = None) -
     warm = content.get("warm_up") or {}
     if warm.get("question"):
         sections.append({
-            "header": "🔥 Warm-up",
+            "header": "🔥 Warm-up (~5 min)",
             "widgets": [{"decoratedText": {"text": warm["question"], "wrapText": True}}],
         })
 
@@ -281,10 +287,17 @@ def build_card_message(content: dict, scheduled_start: datetime | None = None) -
             "widgets": [{"decoratedText": {"text": f"{name} — {suggested.get('relevance_reason', '')}", "wrapText": True}}],
         })
 
+    stretch = content.get("stretch_challenge")
+    if stretch:
+        sections.append({
+            "header": "🚀 Stretch (~10 min)",
+            "widgets": [{"decoratedText": {"text": stretch, "wrapText": True}}],
+        })
+
     wrap = content.get("wrap_up_question")
     if wrap:
         sections.append({
-            "header": "🧭 Wrap-up",
+            "header": "🧭 Wrap-up (~5 min)",
             "widgets": [{"decoratedText": {"text": wrap, "wrapText": True}}],
         })
 

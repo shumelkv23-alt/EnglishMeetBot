@@ -98,11 +98,11 @@ async def _call_llm(payload: dict, timeout: float) -> str | None:
 
 
 async def generate_llm_content(
-    card_type_name: str, difficulty: str, context: str
+    card_type_name: str, difficulty: str, context: str, theme: str | None = None
 ) -> dict | None:
     """Сгенерировать дискуссионную часть карточки.
 
-    Возвращает {"topic", "sub_questions", "vocab_box", "wrap_up_question"}
+    Возвращает {"topic", "sub_questions", "vocab_box", "stretch_challenge", "wrap_up_question"}
     или None при сбое (тогда service использует шаблон из банка).
     """
     settings = get_settings()
@@ -110,6 +110,7 @@ async def generate_llm_content(
         return None
 
     hint = _TYPE_HINTS.get(card_type_name, "a conversation theme")
+    theme_line = f"This week's theme: {theme}. " if theme else ""
     payload = {
         "model": settings.llm_games_model,
         "max_tokens": 2048,
@@ -124,12 +125,14 @@ async def generate_llm_content(
                 "content": (
                     f"Card type: {card_type_name} ({hint}). "
                     f"Group level: {difficulty}. "
+                    f"{theme_line}"
                     "Participants' recent answers (use as inspiration, do not copy verbatim):\n"
                     f"<participant_answers>\n{context}\n</participant_answers>\n\n"
                     'Return strict JSON of the form {"topic": "...", '
                     '"sub_questions": [{"text": "...", "level": "easy"}, '
                     '{"text": "...", "level": "medium"}, {"text": "...", "level": "hard"}], '
                     '"vocab_box": [{"phrase": "...", "translation": "...", "example": "..."}], '
+                    '"stretch_challenge": "...", '
                     '"wrap_up_question": "..."}. Topic is a short phrase (1-6 words). '
                     "Exactly 3 sub_questions and 2-3 vocab items. Translation into Russian."
                 ),
@@ -162,6 +165,7 @@ async def generate_llm_content(
         if isinstance(v, dict) and str(v.get("phrase") or "").strip()
     ]
     wrap_up = str(data.get("wrap_up_question") or "").strip()
+    stretch = str(data.get("stretch_challenge") or "").strip()
 
     if not sub_questions:
         return None
@@ -169,5 +173,6 @@ async def generate_llm_content(
         "topic": topic,
         "sub_questions": sub_questions,
         "vocab_box": vocab_box,
+        "stretch_challenge": stretch,
         "wrap_up_question": wrap_up,
     }
