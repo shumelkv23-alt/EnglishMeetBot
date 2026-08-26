@@ -148,7 +148,7 @@ def build_wheel_card(state: dict, names: dict[str, str], game_id: int) -> dict:
                 finish_btn,
             ]}},
         ]
-        header = {"title": "Поле чудес 🎡", "subtitle": "Wheel of Fortune"}
+        header = {"title": "Wheel Game 🎡", "subtitle": "Wheel of Fortune"}
 
     elif phase == "active":
         word_text = render_word(state.get("word", ""), state.get("revealed", []))
@@ -187,11 +187,11 @@ def build_wheel_card(state: dict, names: dict[str, str], game_id: int) -> dict:
                 _btn("✅ Submit", "wheel_guess", game_id),
                 finish_btn,
             ]}})
-        header = {"title": "Поле чудес 🎡", "subtitle": f"Turn: {names.get(current, current)}"}
+        header = {"title": "Wheel Game 🎡", "subtitle": f"Turn: {names.get(current, current)}"}
 
     else:  # finished
         widgets = [{"textParagraph": {"text": state.get("result_text", "Game over.")}}]
-        header = {"title": "Поле чудес 🏁", "subtitle": "Game over"}
+        header = {"title": "Wheel Game 🏁", "subtitle": "Game over"}
 
     return {"cardsV2": [{
         "cardId": "wheelGame",
@@ -247,7 +247,7 @@ async def setup_wheel(db: AsyncSession, space_name: str) -> dict:
     try:
         resp = await asyncio.to_thread(
             send_message, space_name,
-            text="🎡 Поле чудес! Join in — guess the hidden English word.",
+            text="🎡 Wheel Game! Join in — guess the hidden English word.",
             cards_v2=card["cardsV2"],
         )
         state["scoreboard_message_name"] = resp.get("name", "")

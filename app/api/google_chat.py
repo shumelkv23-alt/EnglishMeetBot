@@ -303,7 +303,7 @@ def _info_card(is_dm: bool) -> dict:
             {"header": "Игры для уроков 🎲", "widgets": [{"textParagraph": {"text": (
                 "`games` — командные игры:\n"
                 "🎲 Alias · 🧪 Snake Oil · 🎮 Quiplash · 🎭 Кто я\n"
-                "🕵️ Spy · 📊 Guesspionage · 🎡 Поле чудес\n"
+                "🕵️ Spy · 📊 Guesspionage · 🎡 Wheel Game\n"
                 "`alias` / `snake` — быстрый старт"
             )}}]},
             {"header": "Рейтинги и баллы 📈", "widgets": [{"textParagraph": {"text": (
@@ -710,7 +710,7 @@ def _games_menu_card(action_url: str) -> dict:
                 _btn("🎭 Who am I?", "menu_who_am_i"),
                 _btn("🕵️ Spy", "menu_spy"),
                 _btn("📊 Guesspionage", "menu_guesspionage"),
-                _btn("🎡 Поле чудес", "menu_wheel"),
+                _btn("🎡 Wheel Game", "menu_wheel"),
             ]}}]}],
         },
     }]}

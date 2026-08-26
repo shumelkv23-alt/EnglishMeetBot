@@ -38,13 +38,13 @@ def test_dm_card_lists_dm_features_only():
     for key in ("learn", "level", "Hangman", "Wordle", "points", "анкета"):
         assert key in text, key
     # не должно быть групповых игр и расписания
-    for key in ("Alias", "Поле чудес", "Guesspionage", "таблица"):
+    for key in ("Alias", "Wheel Game", "Guesspionage", "таблица"):
         assert key not in text, key
 
 
 def test_group_card_lists_group_features_only():
     text = _text(_info_card(False))
-    for key in ("таблица", "вопросы", "Alias", "Поле чудес", "points"):
+    for key in ("таблица", "вопросы", "Alias", "Wheel Game", "points"):
         assert key in text, key
     # не должно быть DM-игр и курсов
     for key in ("Hangman", "Millionaire", "level", "learn"):
