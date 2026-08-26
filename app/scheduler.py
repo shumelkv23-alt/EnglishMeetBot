@@ -71,6 +71,42 @@ async def _finalize_daily_poll() -> None:
         logger.info("daily_finalize_job done poll=%s status=%s", poll.id, poll.status)
 
 
+async def _run_weekly_table() -> None:
+    """Джоб воскресенье 10:00 — постить/обновить недельную таблицу дней × времён."""
+    from app.services.weekly_availability import ensure_weekly_poll, post_or_refresh_weekly_table
+
+    async with AsyncSessionLocal() as db:
+        poll = await ensure_weekly_poll(db)
+        await post_or_refresh_weekly_table(
+            db, poll, text="Кто в какие дни на этой неделе? 🗓️",
+        )
+        logger.info("weekly_table_job poll=%s", poll.id)
+
+
+async def _run_weekly_check() -> None:
+    """Джоб ежедневно 15:00 — собрать встречу на завтра, если набрался кворум."""
+    from app.services.invites import handle_time_finalized
+    from app.services.weekly_availability import (
+        ensure_weekly_poll,
+        post_or_refresh_weekly_table,
+        schedule_tomorrow_meetings,
+    )
+
+    async with AsyncSessionLocal() as db:
+        meeting = await schedule_tomorrow_meetings(db)
+        if meeting is None:
+            logger.info("weekly_check_job no_meeting")
+            return
+        await handle_time_finalized(
+            db, meeting["id"], meeting["day"], meeting["time"],
+            activity=None, scheduled_start=meeting["scheduled_start"],
+        )
+        # Пометить слот ✅ в таблице группы.
+        poll = await ensure_weekly_poll(db)
+        await post_or_refresh_weekly_table(db, poll)
+        logger.info("weekly_check_job scheduled meeting=%s time=%s", meeting["id"], meeting["time"])
+
+
 async def _run_weekly_questions() -> None:
     """Джоб воскресенье 12:00 — еженедельные вопросы в личку каждому участнику."""
     from sqlalchemy import select
@@ -104,6 +140,23 @@ async def _run_close_stale_games() -> None:
     await close_stale_games()
 
 
+async def _run_member_reconcile() -> None:
+    """Джоб каждые 10 мин — упомянуть новых участников группы (без DM с ботом)."""
+    from app.services.space_onboarding import mention_new_members
+    from app.services.weekly_poll import get_or_create_config
+
+    async with AsyncSessionLocal() as db:
+        space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+        if not space_id:
+            return
+        try:
+            n = await mention_new_members(db, space_id)
+            if n:
+                logger.info("member_reconcile_job mentioned=%d", n)
+        except Exception:
+            logger.exception("member_reconcile_job failed space=%s", space_id)
+
+
 def init_scheduler() -> None:
     """Создать и запустить шедулер с ежедневными джобами опроса."""
     global scheduler
@@ -111,20 +164,21 @@ def init_scheduler() -> None:
         return
     scheduler = AsyncIOScheduler(timezone=APP_TZ)
     scheduler.add_job(
-        _run_daily_poll,
+        _run_weekly_table,
         "cron",
-        hour=9,
+        day_of_week="sun",
+        hour=10,
         minute=0,
-        id="daily-poll",
+        id="weekly-table",
         replace_existing=True,
         misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _finalize_daily_poll,
+        _run_weekly_check,
         "cron",
-        hour=14,
-        minute=5,
-        id="daily-finalize",
+        hour=15,
+        minute=0,
+        id="weekly-check",
         replace_existing=True,
         misfire_grace_time=3600,
     )
@@ -146,6 +200,15 @@ def init_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        _run_member_reconcile,
+        "interval",
+        minutes=10,
+        id="member-reconcile",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
     )
     scheduler.start()
     logger.info("scheduler_started")

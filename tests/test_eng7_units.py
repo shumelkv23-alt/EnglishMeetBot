@@ -25,16 +25,19 @@ def test_reminder_at():
 
 def test_checkin_window():
     start = datetime(2026, 8, 26, 19, 0, tzinfo=timezone.utc)
-    open_at, close_at = checkin_window(start, 15)
-    assert open_at == start - timedelta(minutes=15)
-    assert close_at == start + timedelta(minutes=15)
+    end = start + timedelta(minutes=60)
+    open_at, close_at = checkin_window(start, end, 15)
+    assert open_at == start
+    assert close_at == end + timedelta(minutes=15)
 
 
 def test_is_within_window():
     start = datetime(2026, 8, 26, 19, 0, tzinfo=timezone.utc)
-    open_at, close_at = checkin_window(start, 15)
+    end = start + timedelta(minutes=60)
+    open_at, close_at = checkin_window(start, end, 15)
     assert is_within_window(start, open_at, close_at) is True
-    assert is_within_window(start + timedelta(minutes=16), open_at, close_at) is False
+    assert is_within_window(end + timedelta(minutes=10), open_at, close_at) is True
+    assert is_within_window(end + timedelta(minutes=16), open_at, close_at) is False
 
 
 def test_job_ids():

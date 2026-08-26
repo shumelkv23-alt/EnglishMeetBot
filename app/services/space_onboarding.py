@@ -4,10 +4,14 @@
 Чистая функция plan_onboarding вынесена отдельно, чтобы юнит-тестами проверять
 распределение по каналам без БД и сети.
 """
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Profile
+
+logger = logging.getLogger(__name__)
 
 
 def plan_onboarding(profiles_by_ws: dict[str, bool], members: list[str]) -> dict:
@@ -49,3 +53,40 @@ async def onboard_space_members(db: AsyncSession, space_name: str) -> dict:
         for p in profiles
     }
     return plan_onboarding(by_ws, member_ids)
+
+
+async def mention_new_members(
+    db: AsyncSession, space_name: str, member_ids: list[str] | None = None
+) -> int:
+    """Упомянуть в группе участников без DM с ботом, кроме уже упомянутых.
+
+    member_ids — workspace_user_id кандидатов на упоминание. Если None,
+    список берётся из onboard_space_members (участники без chat_space_id).
+    Уже упомянутые хранятся в config["mentioned_members"] (JSON-список),
+    чтобы не спамить одним и тем же при каждой сверке.
+
+    Возвращает число новых упоминаний.
+    """
+    from app.services.chat_sender import send_text
+    from app.services.weekly_poll import get_or_create_config
+
+    if member_ids is None:
+        plan = await onboard_space_members(db, space_name)
+        member_ids = plan["mention"]
+    if not member_ids:
+        return 0
+
+    cfg = await get_or_create_config(db, "mentioned_members", [])
+    mentioned = list(cfg.value) if isinstance(cfg.value, list) else []
+    new = [m for m in member_ids if m not in mentioned]
+    if not new:
+        return 0
+
+    mentions = " ".join(f"<{m}>" for m in new)
+    send_text(space_name, f"{mentions} — DM me to fill out the form 👋")
+
+    mentioned.extend(new)
+    cfg.value = mentioned
+    await db.commit()
+    logger.info("members_mentioned space=%s new=%d", space_name, len(new))
+    return len(new)

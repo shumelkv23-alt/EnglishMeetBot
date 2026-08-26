@@ -71,7 +71,7 @@ def build_daily_poll_card(slots: list[str], action_url: str, votes: dict[str, in
             }},
         })
     buttons.append({
-        "text": "Не могу сегодня",
+        "text": "Can't make it today",
         "onClick": {"action": {
             "function": action_url or "submit_daily_poll",
             "parameters": [
@@ -84,8 +84,8 @@ def build_daily_poll_card(slots: list[str], action_url: str, votes: dict[str, in
         "cardsV2": [{
             "cardId": "dailyPoll",
             "card": {
-                "header": {"title": "Кто сегодня и во сколько? 🗓️",
-                           "subtitle": "Выбери время или «не могу»"},
+                "header": {"title": "Who's in today and when? 🗓️",
+                           "subtitle": "Pick a time or 'can't make it'"},
                 "sections": [{"widgets": [{"buttonList": {"buttons": buttons}}]}],
             },
         }]
@@ -175,7 +175,7 @@ async def ensure_daily_poll(db: AsyncSession, now: datetime) -> DailyPoll | None
             poll_id=poll.id,
             slot_start=st,
             slot_end=st + timedelta(minutes=60),
-            location="Онлайн (Meet)",
+            location="Online (Meet)",
         ))
     await db.commit()
     logger.info("daily_poll_created id=%s date=%s slots=%s", poll.id, day, len(slot_times))
@@ -208,7 +208,7 @@ async def finalize_daily_poll(db: AsyncSession, poll: DailyPoll) -> dict:
             selected_slot_id=slot_by_time[t].id,
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_start + timedelta(minutes=60),
-            location="Онлайн (Meet)",
+            location="Online (Meet)",
             status="scheduled",
         )
         db.add(meeting)

@@ -52,7 +52,7 @@ async def restore_reminders_on_startup() -> int:
     restored = 0
     for m in meetings:
         remind = reminder_at(m.scheduled_start, lead_hours)
-        open_at, close_at = checkin_window(m.scheduled_start, window_min)
+        open_at, close_at = checkin_window(m.scheduled_start, m.scheduled_end, window_min)
         if remind > now:
             scheduler.add_job(_send_reminder, "date", run_date=remind, id=reminder_job_id(str(m.id)), replace_existing=True, args=[str(m.id)])
             restored += 1

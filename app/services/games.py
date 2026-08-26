@@ -200,32 +200,32 @@ def build_quiplash_card(state: dict, names: dict[str, str], game_id: int) -> dic
     phase = state.get("phase", "setup")
     rounds = state.get("config", {}).get("rounds", QUIPLASH_ROUNDS)
     round_num = state.get("round", 1)
-    finish_btn = _btn("🏁 Закончить игру", "game_finish", game_id)
+    finish_btn = _btn("🏁 End game", "game_finish", game_id)
 
     if phase == "setup":
         players = state.get("players", [])
         roster = (
             ", ".join(names.get(p, p) for p in players)
-            if players else "Пока никого — нажми «🙋 Я играю!»"
+            if players else "Nobody yet — press «🙋 I'm playing!»"
         )
         widgets = [
-            {"textParagraph": {"text": f"Игроки ({len(players)}): {roster}"}},
+            {"textParagraph": {"text": f"Players ({len(players)}): {roster}"}},
             {"buttonList": {"buttons": [
-                _btn("🙋 Я играю!", "game_join", game_id),
-                _btn("▶️ Начать", "game_start", game_id),
+                _btn("🙋 I'm playing!", "game_join", game_id),
+                _btn("▶️ Start", "game_start", game_id),
                 finish_btn,
             ]}},
         ]
-        header = {"title": "Quiplash 🎮", "subtitle": f"Тема: {state.get('topic', '')}"}
+        header = {"title": "Quiplash 🎮", "subtitle": f"Topic: {state.get('topic', '')}"}
     elif phase == "voting":
         answers = state.get("answers", {})
         items = list(answers.items())
         widgets = [
-            {"textParagraph": {"text": f"Промпт: {state.get('prompt', '')}"}},
+            {"textParagraph": {"text": f"Prompt: {state.get('prompt', '')}"}},
             {
                 "selectionInput": {
                     "name": "vote",
-                    "label": "Выбери самый смешной ответ",
+                    "label": "Pick the funniest answer",
                     "type": "RADIO_BUTTON",
                     "items": [
                         {"text": f"#{i}. {text}", "value": author}
@@ -234,22 +234,22 @@ def build_quiplash_card(state: dict, names: dict[str, str], game_id: int) -> dic
                 }
             },
             {"buttonList": {"buttons": [
-                _btn("Отправить голос", "game_vote", game_id),
+                _btn("Submit vote", "game_vote", game_id),
                 finish_btn,
             ]}},
         ]
-        header = {"title": f"Раунд {round_num} — голосование 🗳️", "subtitle": "Выбери самый смешной ответ (не свой 😉)"}
+        header = {"title": f"Round {round_num} — voting 🗳️", "subtitle": "Pick the funniest answer (not yours 😉)"}
     elif phase == "finished":
         widgets = [{"textParagraph": {"text": _final_standings_text(state, names)}}]
-        header = {"title": "Quiplash 🏁", "subtitle": "Игра окончена"}
+        header = {"title": "Quiplash 🏁", "subtitle": "Game over"}
     else:  # answering
         widgets = []
         if state.get("last_result"):
             widgets.append({"textParagraph": {"text": state["last_result"]}})
-        widgets.append({"textParagraph": {"text": f"Раунд {round_num}/{rounds}: {state.get('prompt', '')}"}})
-        widgets.append({"textParagraph": {"text": "✍️ Отвечаем в личке (DM) — ответы не видны до голосования 🤫"}})
+        widgets.append({"textParagraph": {"text": f"Round {round_num}/{rounds}: {state.get('prompt', '')}"}})
+        widgets.append({"textParagraph": {"text": "✍️ Answer in your DM — answers stay hidden until voting 🤫"}})
         widgets.append({"buttonList": {"buttons": [finish_btn]}})
-        header = {"title": f"Quiplash 🎮 — раунд {round_num}/{rounds}", "subtitle": state.get("topic", "")}
+        header = {"title": f"Quiplash 🎮 — round {round_num}/{rounds}", "subtitle": state.get("topic", "")}
 
     return {"cardsV2": [{
         "cardId": "quiplashGame",
@@ -264,19 +264,19 @@ def build_quiplash_answer_card(state: dict, game_id: int) -> dict:
     return {"cardsV2": [{
         "cardId": "quiplashAnswer",
         "card": {
-            "header": {"title": f"Раунд {round_num}/{rounds} — твой ответ", "subtitle": state.get("topic", "")},
+            "header": {"title": f"Round {round_num}/{rounds} — your answer", "subtitle": state.get("topic", "")},
             "sections": [{"widgets": [
                 {"textParagraph": {"text": state.get("prompt", "")}},
                 {
                     "textInput": {
                         "name": "answer",
-                        "label": "Твой смешной ответ",
+                        "label": "Your funny answer",
                         "type": "MULTIPLE_LINE",
-                        "hintText": "Напиши самый смешной ответ",
+                        "hintText": "Write the funniest answer",
                     }
                 },
                 {"buttonList": {"buttons": [
-                    _btn("Отправить ответ", "game_answer", game_id, round=round_num),
+                    _btn("Submit answer", "game_answer", game_id, round=round_num),
                 ]}},
             ]}],
         },
@@ -288,10 +288,10 @@ def _quiplash_answer_confirmation_card(state: dict) -> dict:
     return {"cardsV2": [{
         "cardId": "quiplashAnswer",
         "card": {
-            "header": {"title": "✅ Ответ принят", "subtitle": "Ждём остальных…"},
+            "header": {"title": "✅ Answer saved", "subtitle": "Waiting for the others…"},
             "sections": [{"widgets": [{"textParagraph": {
-                "text": f"Раунд {state.get('round', 1)}: {state.get('prompt', '')}\n\n"
-                        "Твой ответ сохранён. Голосование начнётся, когда все ответят 🤫"
+                "text": f"Round {state.get('round', 1)}: {state.get('prompt', '')}\n\n"
+                        "Your answer is saved. Voting starts once everyone has answered 🤫"
             }}]}],
         },
     }]}
@@ -300,11 +300,11 @@ def _quiplash_answer_confirmation_card(state: dict) -> dict:
 def _round_result_text(ranked: list[tuple[str, int]], names: dict[str, str]) -> str:
     """Строка результата раунда."""
     if not ranked:
-        return "Никто не получил голосов 🤷"
+        return "Nobody got any votes 🤷"
     parts = []
     for i, (uid, _) in enumerate(ranked[:2], 1):
         pts = QUIPLASH_WINNER_POINTS if i == 1 else QUIPLASH_SECOND_POINTS
-        parts.append(f"{i}-е место: {names.get(uid, uid)} (+{pts})")
+        parts.append(f"{i}st place: {names.get(uid, uid)} (+{pts})")
     return "🏆 " + " | ".join(parts)
 
 
@@ -312,9 +312,9 @@ def _final_standings_text(state: dict, names: dict[str, str]) -> str:
     """Итоговая таблица очков."""
     scores = state.get("scores", {})
     if not scores:
-        return "🏁 Итог: очков нет."
+        return "🏁 Result: no points."
     ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-    lines = ["🏁 Итоги:"]
+    lines = ["🏁 Final scores:"]
     for uid, pts in ordered:
         lines.append(f"  • {names.get(uid, uid)}: {pts}")
     return "\n".join(lines)
@@ -324,14 +324,14 @@ def build_who_am_i_card(state: dict, names: dict[str, str], game_id: int) -> dic
     """Единая карточка «Кто я?» в группе (cardId «whoAmIGame»): ход + кнопка отмены."""
     phase = state.get("phase", "guessing")
     if phase == "finished":
-        header = {"title": "Кто я? 🏁", "subtitle": "Игра окончена"}
+        header = {"title": "Who am I? 🏁", "subtitle": "Game over"}
         widgets = [{"textParagraph": {"text": _final_standings_text(state, names)}}]
     else:
         current = state.get("current_guesser", "")
-        header = {"title": "Кто я? 🎭", "subtitle": f"Тема: {state.get('topic', '')}"}
+        header = {"title": "Who am I? 🎭", "subtitle": f"Topic: {state.get('topic', '')}"}
         widgets = [
-            {"textParagraph": {"text": f"Сейчас ходит: {names.get(current, current)}"}},
-            {"buttonList": {"buttons": [_btn("🏁 Закончить игру", "who_finish", game_id)]}},
+            {"textParagraph": {"text": f"It's {names.get(current, current)}'s turn"}},
+            {"buttonList": {"buttons": [_btn("🏁 End game", "who_finish", game_id)]}},
         ]
     return {"cardsV2": [{
         "cardId": "whoAmIGame",
@@ -470,7 +470,7 @@ async def _start_session(
 async def setup_quiplash(db: AsyncSession, space_name: str) -> dict:
     """Создать партию Quiplash: тема + промпты, карточка в группу (фаза setup)."""
     if await get_active_game(db, space_name) is not None:
-        return {"text": "Игра уже идёт — заверши её («стоп» или кнопка «🏁 Закончить игру»)."}
+        return {"text": "A game is already running — end it («стоп» or the «🏁 End game» button)."}
 
     cfg = await _load_config(db)
     rounds = cfg["rounds"]
@@ -501,7 +501,7 @@ async def setup_quiplash(db: AsyncSession, space_name: str) -> dict:
     card = build_quiplash_card(state, {}, session.id)
     try:
         resp = await asyncio.to_thread(
-            send_message, space_name, text="Quiplash! Присоединяйся 🎮", cards_v2=card["cardsV2"],
+            send_message, space_name, text="Quiplash! Join in 🎮", cards_v2=card["cardsV2"],
         )
         state["scoreboard_message_name"] = resp.get("name", "")
         session.state = state
@@ -524,7 +524,7 @@ async def _get_or_create_quiplash_bots(db: AsyncSession) -> list[Profile]:
             bot = Profile(
                 workspace_user_id=bot_id,
                 user_email=f"quiplash_bot{i}@test.local",
-                user_name=f"Бот {i} 🤖",
+                user_name=f"Bot {i} 🤖",
             )
             db.add(bot)
             await db.flush()
@@ -535,7 +535,7 @@ async def _get_or_create_quiplash_bots(db: AsyncSession) -> list[Profile]:
 async def setup_quiplash_test(db: AsyncSession, space_name: str, user_profile: Profile) -> dict:
     """«квиплаш тест»: одиночная партия — игрок против бота (бот отвечает и голосует сам)."""
     if await get_active_game(db, space_name) is not None:
-        return {"text": "Игра уже идёт — заверши её («стоп» или кнопка «🏁 Закончить игру»)."}
+        return {"text": "A game is already running — end it («стоп» or the «🏁 End game» button)."}
 
     cfg = await _load_config(db)
     cfg["rounds"] = QUIPLASH_TEST_ROUNDS
@@ -573,7 +573,7 @@ async def setup_quiplash_test(db: AsyncSession, space_name: str, user_profile: P
     card = build_quiplash_card(state, names, session.id)
     try:
         resp = await asyncio.to_thread(
-            send_message, space_name, text="Quiplash (тест): ты против ботов! 🤖", cards_v2=card["cardsV2"],
+            send_message, space_name, text="Quiplash (test): you vs the bots! 🤖", cards_v2=card["cardsV2"],
         )
         state["scoreboard_message_name"] = resp.get("name", "")
         session.state = state
@@ -587,10 +587,10 @@ async def join_quiplash(db: AsyncSession, profile: Profile, game_id: int) -> dic
     """Кнопка «🙋 Я играю!»: добавить игрока в партию, обновить карточку на месте."""
     session = await db.get(GameSession, game_id)
     if session is None or session.game_type != "quiplash":
-        return {"text": "Игра не найдена 🤷"}
+        return {"text": "Game not found 🤷"}
     state = session.state or {}
     if state.get("phase") != "setup":
-        return {"text": "Игра уже началась 🚀"}
+        return {"text": "Game already started 🚀"}
 
     players = list(state.get("players", []))
     ws = profile.workspace_user_id or ""
@@ -610,14 +610,14 @@ async def start_quiplash_game(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «▶️ Начать»: проверка состава, старт раунда 1 + карточки ответов в личку."""
     session = await db.get(GameSession, game_id)
     if session is None or session.game_type != "quiplash":
-        return {"text": "Игра не найдена 🤷"}
+        return {"text": "Game not found 🤷"}
     state = session.state or {}
     if state.get("phase") != "setup":
-        return {"text": "Игра уже началась 🚀"}
+        return {"text": "Game already started 🚀"}
 
     players = list(state.get("players", []))
     if len(players) < 3:
-        return {"text": "Нужно минимум 3 игрока — нажмите «🙋 Я играю!» 🙏"}
+        return {"text": "Need at least 3 players — press «🙋 I'm playing!» 🙏"}
 
     cfg = state.get("config", {})
     state["phase"] = "answering"
@@ -641,9 +641,9 @@ async def finish_quiplash(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «🏁 Закончить игру»: завершить досрочно и показать итог."""
     session = await db.get(GameSession, game_id)
     if session is None or session.game_type != "quiplash":
-        return {"text": "Игра не найдена 🤷"}
+        return {"text": "Game not found 🤷"}
     if session.status == "finished":
-        return {"text": "Игра уже завершена"}
+        return {"text": "Game already finished"}
 
     state = session.state or {}
     state["phase"] = "finished"
@@ -657,9 +657,9 @@ async def finish_who_am_i(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «🏁 Закончить игру» для «Кто я?»: завершить досрочно и показать итог."""
     session = await db.get(GameSession, game_id)
     if session is None or session.game_type != "who_am_i":
-        return {"text": "Игра не найдена 🤷"}
+        return {"text": "Game not found 🤷"}
     if session.status == "finished":
-        return {"text": "Игра уже завершена"}
+        return {"text": "Game already finished"}
 
     state = session.state or {}
     state["phase"] = "finished"
@@ -672,7 +672,7 @@ async def finish_who_am_i(db: AsyncSession, game_id: int) -> dict:
 async def start_who_am_i(db: AsyncSession, space_name: str, player_ids: list[str]) -> dict:
     """Запустить «Кто я?»: тема + сущности одним вызовом ИИ, секреты в DM."""
     if not player_ids:
-        return {"text": "Не удалось определить участников игры 😕"}
+        return {"text": "Couldn't determine the game participants 😕"}
 
     cfg = await _load_config(db)
     game = await generate_who_am_i_game(len(player_ids))
@@ -702,15 +702,15 @@ async def start_who_am_i(db: AsyncSession, space_name: str, player_ids: list[str
     missed = [uid for uid, entity in secrets.items() if not await _dm_secret(db, uid, entity)]
 
     names = await _resolve_names(db, player_ids)
-    text = f"🎭 «Кто я?»! Тема: {topic}\n\nСекреты разосланы в личку."
+    text = f"🎭 «Who am I?»! Topic: {topic}\n\nSecrets have been sent to your DMs."
     if missed:
         miss_names = await _resolve_names(db, missed)
         text += (
-            "\n⚠️ Не смог написать в личку: "
+            "\n⚠️ Couldn't DM: "
             + ", ".join(miss_names.get(u, u) for u in missed)
-            + " — откройте DM с ботом и напишите «мой секрет»."
+            + " — open a DM with the bot and write «my secret»."
         )
-    text += f"\n\nНачинает {names.get(player_ids[0], player_ids[0])}: задавай остальным вопросы «да/нет»!"
+    text += f"\n\n{names.get(player_ids[0], player_ids[0])} starts: ask the others yes/no questions!"
 
     card = build_who_am_i_card(state, names, session.id)
     try:
@@ -736,7 +736,7 @@ async def _get_or_create_who_am_i_bot(db: AsyncSession) -> Profile:
         bot = Profile(
             workspace_user_id=WHO_AM_I_TEST_BOT_USER_ID,
             user_email="who_am_i_bot@test.local",
-            user_name="Бот 🤖",
+            user_name="Bot 🤖",
         )
         db.add(bot)
         await db.flush()
@@ -746,7 +746,7 @@ async def _get_or_create_who_am_i_bot(db: AsyncSession) -> Profile:
 async def setup_who_am_i_test(db: AsyncSession, space_name: str, user_profile: Profile) -> dict:
     """«кто я тест»: одиночная партия — игрок против бота (бот угадывает сам)."""
     if await get_active_game(db, space_name) is not None:
-        return {"text": "Игра уже идёт — заверши её («стоп» или кнопка «🏁 Закончить игру»)."}
+        return {"text": "A game is already running — end it («стоп» or the «🏁 End game» button)."}
 
     bot = await _get_or_create_who_am_i_bot(db)
     player_ids = [p for p in (user_profile.workspace_user_id or "", WHO_AM_I_TEST_BOT_USER_ID) if p]
@@ -784,15 +784,15 @@ async def setup_who_am_i_test(db: AsyncSession, space_name: str, user_profile: P
     ]
 
     names = await _resolve_names(db, player_ids)
-    text = f"🎭 «Кто я?» (тест): ты против бота! 🤖\n\nТема: {topic}\nТвой секрет — в личке."
+    text = f"🎭 «Who am I?» (test): you vs the bot! 🤖\n\nTopic: {topic}\nYour secret is in your DM."
     if missed:
         miss_names = await _resolve_names(db, missed)
         text += (
-            "\n⚠️ Не смог написать в личку: "
+            "\n⚠️ Couldn't DM: "
             + ", ".join(miss_names.get(u, u) for u in missed)
-            + " — открой DM с ботом и напиши «мой секрет»."
+            + " — open a DM with the bot and write «my secret»."
         )
-    text += f"\n\nНачинаешь ты: напиши «угадываю: <кто ты>»."
+    text += f"\n\nYou start: write «угадываю: <who you are>»."
 
     card = build_who_am_i_card(state, names, session.id)
     try:
@@ -820,7 +820,7 @@ async def _dm_secret(db: AsyncSession, uid: str, entity: str) -> bool:
         await asyncio.to_thread(
             send_text,
             profile.chat_space_id,
-            f"🤫 Ты — {entity}. Задавай вопросы «да/нет», чтобы угадать, кто ты!",
+            f"🤫 You are {entity}. Ask yes/no questions to figure out who you are!",
         )
         return True
     except Exception:
@@ -832,10 +832,10 @@ async def _who_am_i_secret(db: AsyncSession, state: dict, user_id: str) -> dict:
     """Повторно отправить секрет игроку в личку."""
     secret = state.get("secrets", {}).get(user_id, "")
     if not secret:
-        return {"text": "У тебя нет секрета в этой игре 🤷"}
+        return {"text": "You don't have a secret in this game 🤷"}
     if await _dm_secret(db, user_id, secret):
-        return {"text": "Секрет отправлен в личку 🤫"}
-    return {"text": "Не могу написать в личку — открой DM с ботом и напиши «мой секрет» ещё раз."}
+        return {"text": "Secret sent to your DM 🤫"}
+    return {"text": "Can't DM you — open a DM with the bot and write «my secret» again."}
 
 
 async def _post_to_space(space_name: str, message: dict) -> None:
@@ -884,7 +884,7 @@ async def _handle_control_command(
     if lowered in ("стоп", "отмена", "stop", "cancel"):
         session.status = "cancelled"
         await db.commit()
-        return {"text": "Игра остановлена 🛑"}
+        return {"text": "Game stopped 🛑"}
     if lowered in ("счёт", "счет", "score"):
         names = await _resolve_names(db, list(state.get("scores", {}).keys()))
         return {"text": _final_standings_text(state, names)}
@@ -910,7 +910,7 @@ async def handle_dm_message(db: AsyncSession, user_id: str, text: str) -> dict |
         if ctrl is not None:
             return ctrl
         if session.game_type == "quiplash":
-            return {"text": "Ответ пришли через карточку в личке — нажми кнопку «Отправить ответ» 🤫"}
+            return {"text": "Send your answer via the card in your DM — press «Submit answer» 🤫"}
         if session.game_type == "who_am_i":
             return await _handle_who_am_i_dm(db, state, user_id, lowered)
     return None
@@ -928,10 +928,10 @@ def _quiplash_reminder(state: dict) -> dict:
     phase = state.get("phase")
     rounds = state.get("config", {}).get("rounds", QUIPLASH_ROUNDS)
     if phase == "voting":
-        return {"text": "Голосование уже идёт — выбери самый смешной ответ в карточке в группе 👇"}
+        return {"text": "Voting is already open — pick the funniest answer on the card in the group 👇"}
     if phase == "setup":
-        return {"text": "Игра ещё не началась — нажмите «🙋 Я играю!», чтобы присоединиться."}
-    return {"text": f"Раунд {state.get('round', 1)}/{rounds}: {state.get('prompt', '')}\n\nОтвет пришли через карточку в личке 🤫"}
+        return {"text": "The game hasn't started yet — press «🙋 I'm playing!» to join."}
+    return {"text": f"Round {state.get('round', 1)}/{rounds}: {state.get('prompt', '')}\n\nSend your answer via the card in your DM 🤫"}
 
 
 async def handle_card_action(
@@ -946,7 +946,7 @@ async def handle_card_action(
     """Обработать клик по карточке Quiplash (join/start/answer/vote/finish)."""
     if method == "game_join":
         if profile is None:
-            return {"text": "Не удалось определить тебя 😕"}
+            return {"text": "Couldn't identify you 😕"}
         return await join_quiplash(db, profile, game_id)
 
     if method == "who_finish":
@@ -954,7 +954,7 @@ async def handle_card_action(
 
     session = await db.get(GameSession, game_id)
     if session is None or session.game_type != "quiplash":
-        return {"text": "Игра не найдена 🤷"}
+        return {"text": "Game not found 🤷"}
     state = session.state or {}
 
     if method == "game_start":
@@ -965,7 +965,7 @@ async def handle_card_action(
         return await submit_quiplash_vote(db, session, state, user_id, form_inputs)
     if method == "game_finish":
         return await finish_quiplash(db, game_id)
-    return {"text": "Неизвестное действие 🤷"}
+    return {"text": "Unknown action 🤷"}
 
 
 async def submit_quiplash_answer(
@@ -975,25 +975,25 @@ async def submit_quiplash_answer(
     """Записать ответ из карточки в личке; при полном сборе — открыть голосование в группе."""
     players = state.get("players", [])
     if user_id not in players:
-        return {"text": "Ты не участник этой игры 🙂"}
+        return {"text": "You're not in this game 🙂"}
     if state.get("phase") != "answering":
-        return {"text": "Сейчас не время отвечать ⏳"}
+        return {"text": "It's not time to answer ⏳"}
 
     # Защита от устаревшей карточки (номер раунда в параметрах кнопки).
     if params and params.get("round"):
         try:
             if int(params["round"]) != state.get("round", 1):
-                return {"text": "Этот раунд уже прошёл — смотри свежую карточку 😉"}
+                return {"text": "That round is already over — check the fresh card 😉"}
         except (TypeError, ValueError):
             pass
 
     answers = state.get("answers", {})
     if user_id in answers:
-        return {"text": "Ты уже ответил в этом раунде 😉"}
+        return {"text": "You already answered this round 😉"}
 
     text = _first_form_value(form_inputs or {}, "answer")
     if not text.strip():
-        return {"text": "Поле ответа пустое — напиши что-нибудь 😊"}
+        return {"text": "The answer field is empty — write something 😊"}
 
     answers[user_id] = text.strip()
     state["answers"] = answers
@@ -1015,17 +1015,17 @@ async def submit_quiplash_vote(
     """Записать голос; последний голос закрывает раунд и возвращает карточку следующего."""
     players = state.get("players", [])
     if user_id not in players:
-        return {"text": "Ты не участник этой игры 🙂"}
+        return {"text": "You're not in this game 🙂"}
     if state.get("phase") != "voting":
-        return {"text": "Сейчас не время голосовать ⏳"}
+        return {"text": "It's not time to vote ⏳"}
 
     votes = state.get("votes", {})
     if user_id in votes:
-        return {"text": "Ты уже проголосовал ✅"}
+        return {"text": "You already voted ✅"}
 
     vote_for = _first_form_value(form_inputs or {}, "vote")
     if not vote_for:
-        return {"text": "Не выбрал вариант 😕"}
+        return {"text": "You didn't pick an option 😕"}
     if vote_for == user_id:
         # Свой вариант в карточке есть, но голос за него просто не засчитываем —
         # без отдельного сообщения в группу.
@@ -1213,7 +1213,7 @@ async def _skip_quiplash_round(db: AsyncSession, session: GameSession, state: di
     cfg = state.get("config", {})
     round_num = state.get("round", 1)
     rounds = cfg.get("rounds", QUIPLASH_ROUNDS)
-    state["last_result"] = f"⏰ Никто не ответил в раунде {round_num} — пропускаем."
+    state["last_result"] = f"⏰ Nobody answered in round {round_num} — skipping."
 
     if round_num >= rounds:
         state["phase"] = "finished"
@@ -1232,7 +1232,7 @@ async def _handle_who_am_i_message(
 ) -> dict:
     current = state.get("current_guesser")
     if current is None:
-        return {"text": "Игра завершена 🏁"}
+        return {"text": "Game over 🏁"}
 
     # Переслать/показать свой секрет (fallback, если DM недоступен)
     if lowered in ("мой секрет", "my secret", "покажи секрет", "мой secret"):
@@ -1240,11 +1240,11 @@ async def _handle_who_am_i_message(
 
     if lowered in ("пропустить", "skip", "пас"):
         if user_id != current:
-            return {"text": "Сейчас ход другого игрока 😊"}
+            return {"text": "It's someone else's turn 😊"}
         names = await _resolve_names(db, [user_id])
         return await _advance_guesser(
             db, session, state,
-            prefix=f"⏭️ {names.get(user_id, user_id)} пропустил(а) ход.\n",
+            prefix=f"⏭️ {names.get(user_id, user_id)} skipped their turn.\n",
         )
 
     if lowered.startswith(("угадываю", "guess", "я думаю", "я -", "я —", "я это")):
@@ -1258,11 +1258,11 @@ async def _check_guess(
     db: AsyncSession, session: GameSession, state: dict, user_id: str, current: str, guess: str
 ) -> dict:
     if user_id != current:
-        return {"text": "Сейчас не твой ход угадывать 😊"}
+        return {"text": "It's not your turn to guess 😊"}
 
     secret = state.get("secrets", {}).get(current, "")
     if not secret or not guess:
-        return {"text": "Не понял догадку. Напиши «угадываю: <кто ты>»."}
+        return {"text": "Didn't get the guess. Write «угадываю: <who you are>»."}
 
     matched = _entities_match(secret, guess)
     if not matched:
@@ -1277,10 +1277,10 @@ async def _check_guess(
         names = await _resolve_names(db, [current])
         return await _advance_guesser(
             db, session, state,
-            prefix=f"✅ {names.get(current, current)} угадал(а)! Это: {secret}\n",
+            prefix=f"✅ {names.get(current, current)} guessed it! It's: {secret}\n",
         )
 
-    return {"text": "Не угадал! Продолжай задавать вопросы или попробуй ещё раз 😉"}
+    return {"text": "Not it! Keep asking questions or try again 😉"}
 
 
 async def _advance_guesser(
@@ -1307,7 +1307,7 @@ async def _advance_guesser(
 
     names = await _resolve_names(db, [order[next_idx]])
     nxt = names.get(order[next_idx], order[next_idx])
-    return {"text": f"{prefix}\nСледующий: {nxt} — задавай вопросы «да/нет»!"}
+    return {"text": f"{prefix}\nNext: {nxt} — ask yes/no questions!"}
 
 
 def _schedule_who_am_i_bot_tick(game_id: int) -> None:
@@ -1344,7 +1344,7 @@ async def _who_am_i_bot_tick(game_id: int) -> None:
         names = await _resolve_names(db, [current])
         result = await _advance_guesser(
             db, session, state,
-            prefix=f"✅ {names.get(current, current)} угадал(а)! Это: {secret}\n",
+            prefix=f"✅ {names.get(current, current)} guessed it! It's: {secret}\n",
         )
         await _post_to_space(session.space_name, result)
 
@@ -1369,7 +1369,7 @@ async def _finish_game(db: AsyncSession, session: GameSession, state: dict) -> N
             "game",
             pts,
             meeting_instance_id=session.meeting_instance_id,
-            reason=f"{session.game_type} — итоговые очки",
+            reason=f"{session.game_type} — final points",
             metadata={"game_type": session.game_type},
         )
     session.status = "finished"
@@ -1421,6 +1421,6 @@ async def _timeout_who_am_i(db: AsyncSession, session: GameSession, state: dict)
     if current is None:
         return
     names = await _resolve_names(db, [current])
-    prefix = f"⏰ {names.get(current, current)} не уложился(ась) в ход — пропускаем.\n"
+    prefix = f"⏰ {names.get(current, current)} ran out of time — skipping.\n"
     result = await _advance_guesser(db, session, state, prefix=prefix)
     await _post_to_space(session.space_name, result)

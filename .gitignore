@@ -18,3 +18,8 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# Туннель и артефакты
+Cloudflared/
+*.log
+*.docx

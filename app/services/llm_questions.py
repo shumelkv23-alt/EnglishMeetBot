@@ -21,11 +21,11 @@ DEFAULT_BASE_URL = "https://llm.azati.ai"
 ANTHROPIC_VERSION = "2023-06-01"
 
 _SYSTEM_PROMPT = (
-    "Ты генерируешь один лёгкий разговорный вопрос по-русски для практики "
-    "английского языка на еженедельной встрече коллег. Вопрос должен быть "
-    "личным, конкретным и располагать к короткому рассказу (2-3 минуты). "
-    "Учитывай интересы собеседника. Верни строго JSON вида "
-    '{"question_text": "текст вопроса"}. Без комментариев и разметки.'
+    "You generate one easy conversational question in English for practicing "
+    "English at a weekly meeting of colleagues. The question should be personal, "
+    "specific and invite a short story (2–3 minutes). Consider the speaker's "
+    "interests. Return strictly JSON like "
+    '{"question_text": "question text"}. No commentary or markup.'
 )
 
 
@@ -113,10 +113,10 @@ def generate_personal_question(
     if not model:
         return None
 
-    interests_text = ", ".join(interests) if interests else "нет явных предпочтений"
+    interests_text = ", ".join(interests) if interests else "no clear preferences"
     user_prompt = (
-        f"Интересы собеседника: {interests_text}. "
-        "Сформулируй один вопрос, связанный с этими интересами."
+        f"The speaker's interests: {interests_text}. "
+        "Formulate one question related to these interests."
     )
     payload = {
         "model": model,
@@ -158,19 +158,19 @@ def generate_weekly_questions(
         return None
 
     system = (
-        "Ты придумываешь два лёгких разговорных вопроса по-русски для практики "
-        "английского языка на еженедельной встрече коллег. Вопросы должны быть "
-        "личными, конкретными, опираться на интересы и прошлые ответы собеседника "
-        "и располагать к короткому рассказу (2–3 минуты). Не повторяй прошлые темы. "
-        'Верни строго JSON вида {"questions": ["вопрос 1", "вопрос 2"]}. '
-        "Без комментариев и разметки."
+        "You come up with two easy conversational questions in English for practicing "
+        "English at a weekly meeting of colleagues. The questions should be personal, "
+        "specific, grounded in the speaker's interests and past answers, and invite a "
+        "short story (2–3 minutes). Don't repeat past topics. "
+        'Return strictly JSON like {"questions": ["question 1", "question 2"]}. '
+        "No commentary or markup."
     )
     payload = {
         "model": model,
         "max_tokens": 2048,
         "system": system,
         "messages": [
-            {"role": "user", "content": f"Контекст участника:\n{context}\n\nСформулируй два вопроса."}
+            {"role": "user", "content": f"Participant context:\n{context}\n\nFormulate two questions."}
         ],
     }
 

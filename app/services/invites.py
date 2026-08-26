@@ -13,17 +13,17 @@ def _theme_from_activity(activity: Activity | None) -> str | None:
 
 def build_invite_text(day: str, time: str, theme: str | None) -> str:
     """Персональное приглашение: время + тема (REQ-5.1)."""
-    base = f"Встреча по английскому: {day} в {time} 📅"
+    base = f"English meetup: {day} at {time} 📅"
     if theme:
-        return f"{base}\n\nТема встречи: {theme}"
+        return f"{base}\n\nMeeting topic: {theme}"
     return base
 
 
 def build_escalation_text() -> str:
     """Сообщение организатору при не набранном кворуме (REQ-9.5, REQ-3.5)."""
     return (
-        "Не получилось выбрать время встречи на эту неделю: кворум не набран. "
-        "Реши вручную или задай новые слоты, пожалуйста. 🙏"
+        "Couldn't pick a meeting time this week: quorum not reached. "
+        "Please decide manually or set new slots. 🙏"
     )
 
 
@@ -74,9 +74,11 @@ async def handle_time_finalized(
 ) -> dict:
     """При TIME_FINALIZED: личные приглашения ответившим на опрос, пост в Space,
     джобы напоминания и check-in окна. REQ-5.1, REQ-5.2, REQ-9.2–9.3."""
-    poll_id = (await db.execute(
-        select(MeetingORM.poll_id).where(MeetingORM.id == instance_id)
+    meeting = (await db.execute(
+        select(MeetingORM).where(MeetingORM.id == instance_id)
     )).scalar_one_or_none()
+    poll_id = meeting.poll_id if meeting is not None else None
+    scheduled_end = meeting.scheduled_end if meeting is not None else None
     responders = []
     if poll_id is not None:
         responders = (await db.execute(
@@ -109,7 +111,7 @@ async def handle_time_finalized(
             args=[str(instance_id)],
         )
         window_min = int(await _config_value(db, "checkin_window_minutes", 15) or 15)
-        open_at, close_at = checkin_window(scheduled_start, window_min)
+        open_at, close_at = checkin_window(scheduled_start, scheduled_end, window_min)
         sch.add_job(
             _open_checkin, "date", run_date=open_at,
             id=checkin_job_ids(str(instance_id))["open"], replace_existing=True,
@@ -153,7 +155,7 @@ async def _send_reminder(instance_id: str) -> None:
         for profile in profiles:
             send_message(
                 profile.workspace_user_id,
-                MessagePayload(text=f"⏰ Через час встреча по английскому!\n\n{text}"),
+                MessagePayload(text=f"⏰ English meetup in one hour!\n\n{text}"),
             )
         logger.info("reminder_sent instance=%s profiles=%s", instance_id, len(profiles))
 
@@ -163,7 +165,7 @@ def _open_checkin(space_id: str, card: dict) -> None:
     if space_id:
         send_space_message(
             space_id,
-            text="Встреча начинается — отметься! ✅",
+            text="The meeting is starting — check in! ✅",
             cards_v2=card.get("cardsV2"),
         )
 

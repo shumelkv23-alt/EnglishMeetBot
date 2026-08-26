@@ -46,11 +46,11 @@ logger = logging.getLogger(__name__)
 TEST_BOT_USER_ID = "users/snake_bot_test"
 
 WINNER_PHRASES = [
-    "Гениальный впариватель — покупатель уже бежит за кошельком! 💸",
-    "Так продают только легенды Змеиного масла! 🧪",
-    "Блестящий питч, товар ушёл как горячие пирожки! 🔥",
-    "Покупатель не устоял — и мы тебя понимаем! 😎",
-    "Настоящий мастер впаривания! 👑",
+    "A genius pitch — the customer is already reaching for their wallet! 💸",
+    "That's how Snake Oil legends sell! 🧪",
+    "A brilliant pitch, it sold like hotcakes! 🔥",
+    "The customer couldn't resist — and we get it! 😎",
+    "A true master of the hustle! 👑",
 ]
 
 
@@ -92,7 +92,7 @@ def _is_bot(profile: Profile) -> bool:
 
 
 def _winner_congrats(profile: Profile, score: int) -> str:
-    return f"🏆 Побеждает {_display(profile)} со счётом {score}! {random.choice(WINNER_PHRASES)}"
+    return f"🏆 {_display(profile)} wins with {score} points! {random.choice(WINNER_PHRASES)}"
 
 
 # --- Карточки ---
@@ -105,17 +105,17 @@ def build_scoreboard_card(
 ) -> dict:
     """Карточка в группе: счёт игроков, кнопки (setup) / итог (finished)."""
     if game.status == "setup":
-        subtitle = "Нажми «Я играю!» и потом «Начать»"
+        subtitle = "Press «I'm playing!» and then «Start»"
     elif game.status == "finished":
-        subtitle = "Игра окончена"
+        subtitle = "Game over"
     else:
-        subtitle = f"До {game.target_score} очков"
+        subtitle = f"To {game.target_score} points"
 
-    lines = [f"{_display(prof)} — {sp.score} очк." for sp, prof in players] or ["Пока никто не играет"]
+    lines = [f"{_display(prof)} — {sp.score} pts" for sp, prof in players] or ["Nobody is playing yet"]
     sections = [{"widgets": [{"textParagraph": {"text": "\n".join(lines)}}]}]
 
     finish_button = {
-        "text": "🏁 Закончить игру",
+        "text": "🏁 End game",
         "onClick": {"action": {
             "function": action_url,
             "parameters": [
@@ -128,7 +128,7 @@ def build_scoreboard_card(
     if game.status == "setup":
         buttons = [
             {
-                "text": "🎲 Я играю!",
+                "text": "🎲 I'm playing!",
                 "onClick": {"action": {
                     "function": action_url,
                     "parameters": [
@@ -138,7 +138,7 @@ def build_scoreboard_card(
                 }},
             },
             {
-                "text": "▶️ Начать",
+                "text": "▶️ Start",
                 "onClick": {"action": {
                     "function": action_url,
                     "parameters": [
@@ -156,12 +156,12 @@ def build_scoreboard_card(
         winner = next((prof for sp, prof in players if prof.id == game.winner_profile_id), None)
         if winner is not None:
             sections.append({"widgets": [{"textParagraph": {
-                "text": f"🏆 Победил {_display(winner)}!"
+                "text": f"🏆 {_display(winner)} wins!"
             }}]})
 
     return {"cardsV2": [{
         "cardId": "snakeGame",
-        "card": {"header": {"title": "Змеиное масло 🧪", "subtitle": subtitle}, "sections": sections},
+        "card": {"header": {"title": "Snake Oil 🧪", "subtitle": subtitle}, "sections": sections},
     }]}
 
 
@@ -169,15 +169,15 @@ def build_seller_card(round: SnakeRound, word1: str, word2: str, action_url: str
     """Карточка продавцу в личке: роль покупателя + проблема + 2 слова."""
     sections = [
         {"widgets": [{"textParagraph": {"text": (
-            f"Покупатель: {round.persona}\n"
-            f"❗ Проблема: {round.problem}\n\n"
-            f"Твой товар из слов:\n🔹 {word1}\n🔹 {word2}\n\n"
-            "Придумай и впарь товар!"
+            f"Customer: {round.persona}\n"
+            f"❗ Problem: {round.problem}\n\n"
+            f"Your product from the words:\n🔹 {word1}\n🔹 {word2}\n\n"
+            "Come up with a product and sell it!"
         )}}]},
     ]
     if solo:
         sections.append({"widgets": [{"buttonList": {"buttons": [
-            {"text": "🎤 Готов(а) — суди", "onClick": {"action": {
+            {"text": "🎤 Ready — judge", "onClick": {"action": {
                 "function": action_url,
                 "parameters": [
                     {"key": "method", "value": "snake_solo_ready"},
@@ -187,7 +187,7 @@ def build_seller_card(round: SnakeRound, word1: str, word2: str, action_url: str
         ]}}]})
     return {"cardsV2": [{
         "cardId": "snakeSeller",
-        "card": {"header": {"title": "Ты продавец! 🎤", "subtitle": round.persona}, "sections": sections},
+        "card": {"header": {"title": "You're the seller! 🎤", "subtitle": round.persona}, "sections": sections},
     }]}
 
 
@@ -200,7 +200,7 @@ def build_customer_card(
     lines = [f"{_display(prof)}: {offer.word1} + {offer.word2}" for offer, prof in sellers]
     buttons = [
         {
-            "text": f"Выбрать {_display(prof)}",
+            "text": f"Choose {_display(prof)}",
             "onClick": {"action": {
                 "function": action_url,
                 "parameters": [
@@ -215,9 +215,9 @@ def build_customer_card(
     return {"cardsV2": [{
         "cardId": "snakeCustomer",
         "card": {
-            "header": {"title": "Ты покупатель! 🛒", "subtitle": f"{round.persona} · {round.problem}"},
+            "header": {"title": "You're the customer! 🛒", "subtitle": f"{round.persona} · {round.problem}"},
             "sections": [
-                {"widgets": [{"textParagraph": {"text": "Кто впарил лучший товар?\n\n" + "\n".join(lines)}}]},
+                {"widgets": [{"textParagraph": {"text": "Who sold the best product?\n\n" + "\n".join(lines)}}]},
                 {"widgets": [{"buttonList": {"buttons": buttons}}]},
             ],
         },
@@ -227,7 +227,7 @@ def build_customer_card(
 def build_done_card(text: str, card_id: str = "snakeCustomer") -> dict:
     return {"cardsV2": [{
         "cardId": card_id,
-        "card": {"header": {"title": "Раунд завершён ✅"},
+        "card": {"header": {"title": "Round over ✅"},
                  "sections": [{"widgets": [{"textParagraph": {"text": text}}]}]},
     }]}
 
@@ -296,21 +296,21 @@ def build_round_card(
 ) -> dict:
     """Карточка текущего раунда в группе (патчится на месте каждый раунд)."""
     if solo:
-        buyer = f"🛒 Покупатель: 🤖 Бот — {round.persona}"
-        hint = "Придумай товар и нажми «Готов(а)» в личке 🎤"
+        buyer = f"🛒 Customer: 🤖 Bot — {round.persona}"
+        hint = "Come up with a product and press «Ready» in your DM 🎤"
     else:
-        buyer = f"🛒 Покупатель: {_display(customer)} — {round.persona}"
-        hint = "Продавцы готовят товары… 🎤"
+        buyer = f"🛒 Customer: {_display(customer)} — {round.persona}"
+        hint = "Sellers are preparing their products… 🎤"
     lines = []
     if previous_result:
         lines.append(previous_result)
     lines.append(buyer)
-    lines.append(f"❗ Проблема: {round.problem}")
+    lines.append(f"❗ Problem: {round.problem}")
     lines.append(hint)
     return {"cardsV2": [{
         "cardId": "snakeRound",
         "card": {
-            "header": {"title": f"Раунд {round.number} 🧪", "subtitle": "Змеиное масло"},
+            "header": {"title": f"Round {round.number} 🧪", "subtitle": "Snake Oil"},
             "sections": [{"widgets": [{"textParagraph": {"text": "\n".join(lines)}}]}],
         },
     }]}
@@ -360,16 +360,16 @@ def _judge_pair(
         return None
     base_url = (settings.llm_base_url or "https://llm.azati.ai").rstrip("/")
     system = (
-        "Ты — покупатель в игре «Змеиное масло». Твоя роль и бытовая проблема заданы. "
-        "Тебе предлагают два товара, каждый собран из двух случайных слов. Выбери более "
-        'удачный/забавный товар. Верни строго JSON вида {"winner": 1}, где 1 или 2 — '
-        "номер товара. Без комментариев и разметки."
+        "You are the customer in the game \"Snake Oil\". Your role and everyday problem "
+        "are given. You are offered two products, each built from two random words. Pick the "
+        'better/funnier product. Return strictly JSON of the form {"winner": 1}, where 1 or 2 '
+        "is the product number. No commentary or markup."
     )
     user_prompt = (
-        f"Роль покупателя: {persona}\nПроблема: {problem}\n\n"
-        f"Товар 1: {a_words[0]} + {a_words[1]}\n"
-        f"Товар 2: {b_words[0]} + {b_words[1]}\n\n"
-        "Какой товар выберет покупатель? Верни JSON."
+        f"Customer role: {persona}\nProblem: {problem}\n\n"
+        f"Product 1: {a_words[0]} + {a_words[1]}\n"
+        f"Product 2: {b_words[0]} + {b_words[1]}\n\n"
+        "Which product will the customer choose? Return JSON."
     )
     payload = {
         "model": model,
@@ -428,7 +428,7 @@ async def setup_game(db: AsyncSession, space_name: str, target_score: int) -> di
     await db.flush()
     card = build_scoreboard_card(game, [], _action_url())
     resp = send_space_message(
-        space_name, text="Змеиное масло! 🧪 Соберись и нажми «Начать»", cards_v2=card["cardsV2"],
+        space_name, text="Snake Oil! 🧪 Gather up and press «Start»", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
     await db.commit()
@@ -448,7 +448,7 @@ async def _get_or_create_bot(db: AsyncSession) -> Profile:
     )).scalar_one_or_none()
     if bot is None:
         bot = Profile(
-            workspace_user_id=TEST_BOT_USER_ID, user_email="snake_bot@test.local", user_name="Бот 🤖",
+            workspace_user_id=TEST_BOT_USER_ID, user_email="snake_bot@test.local", user_name="Bot 🤖",
         )
         db.add(bot)
         await db.flush()
@@ -468,7 +468,7 @@ async def setup_test_game(db: AsyncSession, space_name: str, user_profile: Profi
     players = await _players_of_game(db, game.id)
     card = build_scoreboard_card(game, players, _action_url())
     resp = send_space_message(
-        space_name, text="Змеиное масло (тест): ты против бота! 🤖", cards_v2=card["cardsV2"],
+        space_name, text="Snake Oil (test): you vs the bot! 🤖", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
     await db.commit()
@@ -480,9 +480,9 @@ async def join_game(db: AsyncSession, profile: Profile, game_id: int) -> dict:
     """Кнопка «Я играю!»: записать игрока (идемпотентно), обновить карточку."""
     game = (await db.execute(select(SnakeGame).where(SnakeGame.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status != "setup":
-        return {"ok": False, "text": "Игра уже началась 🚀"}
+        return {"ok": False, "text": "Game already started 🚀"}
     existing = (await db.execute(
         select(SnakePlayer).where(
             SnakePlayer.game_id == game_id, SnakePlayer.profile_id == profile.id,
@@ -500,12 +500,12 @@ async def join_game(db: AsyncSession, profile: Profile, game_id: int) -> dict:
 async def start_game(db: AsyncSession, game_id: int) -> dict:
     game = (await db.execute(select(SnakeGame).where(SnakeGame.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status != "setup":
-        return {"ok": False, "text": "Игра уже началась 🚀"}
+        return {"ok": False, "text": "Game already started 🚀"}
     players = await _players_of_game(db, game_id)
     if len(players) < 2:
-        return {"ok": False, "text": "Нужно минимум 2 игрока 🙏"}
+        return {"ok": False, "text": "Need at least 2 players 🙏"}
 
     game.status = "active"
     await db.commit()
@@ -563,11 +563,11 @@ async def _start_round(
         if _is_bot(prof):
             continue
         card = build_seller_card(round, offer.word1, offer.word2, _action_url(), solo=solo)
-        _send_dm_card(prof, card["cardsV2"], text="Ты продавец! 🎤")
+        _send_dm_card(prof, card["cardsV2"], text="You're the seller! 🎤")
 
     if not solo:
         card = build_customer_card(round, offers, _action_url())
-        _send_dm_card(customer, card["cardsV2"], text="Выбирай, у кого покупаешь 🛒")
+        _send_dm_card(customer, card["cardsV2"], text="Choose who you're buying from 🛒")
 
     logger.info("snake_round_started round=%s game=%s customer=%s", round.id, game.id, customer.id)
 
@@ -578,26 +578,26 @@ async def vote(db: AsyncSession, round_id: int, offer_id: int, voter: Profile) -
         select(SnakeRound).where(SnakeRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "active":
-        return {"ok": False, "text": "Раунд уже завершён"}
+        return {"ok": False, "text": "Round already over"}
     if round.customer_profile_id != voter.id:
-        return {"ok": False, "text": "Выбирает только покупатель 🛒"}
+        return {"ok": False, "text": "Only the customer chooses 🛒"}
     offer = (await db.execute(
         select(SnakeOffer).where(SnakeOffer.id == offer_id, SnakeOffer.round_id == round_id)
     )).scalar_one_or_none()
     if offer is None:
-        return {"ok": False, "text": "Предложение не найдено 🤷"}
+        return {"ok": False, "text": "Offer not found 🤷"}
     game = (await db.execute(
         select(SnakeGame).where(SnakeGame.id == round.game_id)
     )).scalar_one_or_none()
     if game is None or game.status != "active":
-        return {"ok": False, "text": "Игра завершена 🏁"}
+        return {"ok": False, "text": "Game over 🏁"}
     winner = (await db.execute(
         select(Profile).where(Profile.id == offer.seller_profile_id)
     )).scalar_one_or_none()
     if winner is None:
-        return {"ok": False, "text": "Продавец не найден 🤷"}
+        return {"ok": False, "text": "Seller not found 🤷"}
     return await _finalize_vote(db, round, game, winner)
 
 
@@ -607,14 +607,14 @@ async def solo_ready(db: AsyncSession, round_id: int) -> dict:
         select(SnakeRound).where(SnakeRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "active":
-        return {"ok": False, "text": "Раунд уже завершён"}
+        return {"ok": False, "text": "Round already over"}
     game = (await db.execute(
         select(SnakeGame).where(SnakeGame.id == round.game_id)
     )).scalar_one_or_none()
     if game is None or game.status != "active":
-        return {"ok": False, "text": "Игра завершена 🏁"}
+        return {"ok": False, "text": "Game over 🏁"}
     offers = (await db.execute(
         select(SnakeOffer, Profile)
         .join(Profile, Profile.id == SnakeOffer.seller_profile_id)
@@ -637,9 +637,9 @@ async def _finalize_vote(db: AsyncSession, round: SnakeRound, game: SnakeGame, w
     players = await _players_of_game(db, game.id)
     winner_sp = next((sp for sp, p in players if p.id == winner.id), None)
     customer = next((p for sp, p in players if sp.profile_id == round.customer_profile_id), None)
-    cname = _display(customer) if customer else "Покупатель"
+    cname = _display(customer) if customer else "Customer"
     score = winner_sp.score if winner_sp else 0
-    result_line = f"🛍️ {cname} купил у {_display(winner)} — {_display(winner)} +1 ({score} очк.)"
+    result_line = f"🛍️ {cname} bought from {_display(winner)} — {_display(winner)} +1 ({score} pts)"
 
     if winner_sp is not None and winner_sp.score >= game.target_score:
         game.status = "finished"
@@ -660,21 +660,21 @@ async def _finalize_vote(db: AsyncSession, round: SnakeRound, game: SnakeGame, w
     next_customer = _bot_of(players) if _is_solo(players) else winner
     await _start_round(db, game, next_customer, players, previous_result=result_line)
     await _refresh_scoreboard(db, game)
-    return {"ok": True, "cards_v2": build_done_card("Следующий раунд начался — смотри личку 😉")["cardsV2"]}
+    return {"ok": True, "cards_v2": build_done_card("Next round started — check your DM 😉")["cardsV2"]}
 
 
 def _build_finish_summary(game: SnakeGame, players: list[tuple[SnakePlayer, Profile]]) -> str:
     if not players:
-        return "🏁 Игра остановлена — не доиграли до конца"
+        return "🏁 Game stopped — didn't finish"
     top_score = max(sp.score for sp, _ in players)
     leaders = [p for sp, p in players if sp.score == top_score]
-    lines = ["🏁 Игра остановлена — не доиграли до конца"]
+    lines = ["🏁 Game stopped — didn't finish"]
     if len(leaders) == 1:
-        lines.append(f"Ближе всех к победе: {_display(leaders[0])} — {top_score} очк.")
+        lines.append(f"Closest to winning: {_display(leaders[0])} — {top_score} pts")
     else:
         names = ", ".join(_display(p) for p in leaders)
-        lines.append(f"Лидируют поровну: {names} — по {top_score} очк.")
-    lines.append(f"Цель была {game.target_score} очков")
+        lines.append(f"Tied in the lead: {names} — {top_score} pts each")
+    lines.append(f"The goal was {game.target_score} points")
     return "\n".join(lines)
 
 
@@ -682,9 +682,9 @@ async def finish_game(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «🏁 Закончить игру»: завершить досрочно и показать ближайший результат."""
     game = (await db.execute(select(SnakeGame).where(SnakeGame.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status == "finished":
-        return {"ok": False, "text": "Игра уже завершена"}
+        return {"ok": False, "text": "Game already finished"}
 
     players = await _players_of_game(db, game_id)
     top_score = max((sp.score for sp, _ in players), default=0)

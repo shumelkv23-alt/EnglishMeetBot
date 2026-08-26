@@ -84,9 +84,9 @@ def _build_context(profile: Profile, recent_answers: list[str], asked: list[str]
     """Строковый контекст участника для LLM (с уже заданными вопросами)."""
     lines: list[str] = []
     if profile.interests:
-        lines.append("Интересы: " + ", ".join(profile.interests))
+        lines.append("Interests: " + ", ".join(profile.interests))
     if profile.english_level:
-        lines.append("Уровень английского: " + profile.english_level)
+        lines.append("English level: " + profile.english_level)
     onboarding = profile.onboarding_answers or {}
     if isinstance(onboarding, dict):
         for question, answer in onboarding.items():
@@ -96,10 +96,10 @@ def _build_context(profile: Profile, recent_answers: list[str], asked: list[str]
             if value:
                 lines.append(f"{question}: {value}")
     if recent_answers:
-        lines.append("Недавние ответы: " + " | ".join(recent_answers))
+        lines.append("Recent answers: " + " | ".join(recent_answers))
     if asked:
-        lines.append("Уже задавали (не повторяй эти вопросы): " + " | ".join(asked))
-    return "\n".join(lines) or "нет данных об участнике"
+        lines.append("Already asked (don't repeat these): " + " | ".join(asked))
+    return "\n".join(lines) or "no participant data"
 
 
 def _finalize_questions(candidates: list[str], asked: set[str], week: date) -> list[str]:
@@ -162,7 +162,7 @@ def build_weekly_questions_card(
                 "widgets": [
                     {
                         "textParagraph": {
-                            "text": "✅ Ответ отправлен! Записал — обсудим на ближайшей встрече."
+                            "text": "✅ Answers sent! Saved — we'll discuss them at the next meeting."
                         }
                     }
                 ]
@@ -171,13 +171,13 @@ def build_weekly_questions_card(
     else:
         sections = [
             {
-                "header": "Ответь на оба вопроса",
+                "header": "Answer both questions",
                 "widgets": [
                     {
                         "textParagraph": {
                             "text": (
-                                "Пиши на английском (можно и по-русски) — "
-                                "главное практика 🙂"
+                                "Write in English (any language works) — "
+                                "practice is what matters 🙂"
                             )
                         }
                     }
@@ -192,9 +192,9 @@ def build_weekly_questions_card(
                         {
                             "textInput": {
                                 "name": f"answer{i}",
-                                "label": "Твой ответ",
+                                "label": "Your answer",
                                 "type": "MULTIPLE_LINE",
-                                "hintText": "Например: I’d love to talk about…",
+                                "hintText": "e.g. I’d love to talk about…",
                             }
                         }
                     ],
@@ -207,7 +207,7 @@ def build_weekly_questions_card(
                         "buttonList": {
                             "buttons": [
                                 {
-                                    "text": "Отправить ответы",
+                                    "text": "Submit answers",
                                     "color": {
                                         "red": 0.16,
                                         "green": 0.52,
@@ -238,8 +238,8 @@ def build_weekly_questions_card(
                 "cardId": "weeklyQuestions",
                 "card": {
                     "header": {
-                        "title": "🎯 Вопросы недели",
-                        "subtitle": "Обсудим твои ответы на ближайшей встрече",
+                        "title": "🎯 Questions of the week",
+                        "subtitle": "We'll discuss your answers at the next meeting",
                     },
                     "sections": sections,
                 },
@@ -275,7 +275,7 @@ async def send_weekly_questions(db: AsyncSession, profile: Profile) -> bool:
     card = build_weekly_questions_card(questions, get_settings().chat_app_audience)
     send_message(
         profile.chat_space_id,
-        text="🎯 Вопросы недели",
+        text="🎯 Questions of the week",
         cards_v2=card["cardsV2"],
     )
     logger.info("weekly_questions_sent profile=%s", profile.id)

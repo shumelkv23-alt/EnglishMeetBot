@@ -61,7 +61,7 @@ async def award_attendance(db: AsyncSession, profile_id: int, meeting_instance_i
         "attendance",
         points,
         meeting_instance_id=meeting_instance_id,
-        reason="Посещение встречи",
+        reason="Meeting attendance",
     )
     if awarded:
         logger.info("points_awarded profile=%s meeting=%s points=%s", profile_id, meeting_instance_id, points)
@@ -69,13 +69,18 @@ async def award_attendance(db: AsyncSession, profile_id: int, meeting_instance_i
 
 
 async def get_leaderboard(db: AsyncSession, top_n: int = 10) -> list[dict]:
-    """Топ-N участников по сумме баллов: [{'name': str, 'points': int}, ...]."""
+    """Топ-N участников по сумме баллов: [{'name': str, 'points': int}, ...].
+
+    Синтетические профили ботов (соло-игры «vs bot») имеют email вида
+    `*@test.local` — они исключаются из общего топа баллов.
+    """
     rows = await db.execute(
         select(
             Profile.user_name,
             func.sum(LeaderboardLedger.points).label("total"),
         )
         .join(LeaderboardLedger, LeaderboardLedger.profile_id == Profile.id)
+        .where(~Profile.user_email.like("%@test.local"))
         .group_by(Profile.id, Profile.user_name)
         .order_by(func.sum(LeaderboardLedger.points).desc(), Profile.user_name.asc())
         .limit(top_n)

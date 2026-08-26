@@ -43,15 +43,15 @@ logger = logging.getLogger(__name__)
 
 # Эмодзи команд по кругу (для произвольного числа команд).
 TEAM_EMOJIS = ["🔵", "🔴", "🟢", "🟡", "🟣", "🟠", "⚪", "🟤"]
-DEFAULT_TEAM_NAMES = ["Команда 1", "Команда 2"]
+DEFAULT_TEAM_NAMES = ["Team 1", "Team 2"]
 
 # Поздравления победителю (одно случайное в конце партии).
 WINNER_PHRASES = [
-    "Вы настоящие мастера слов! 🔥",
-    "Блестящая игра — все слова покорены! 👑",
-    "Команда мечты! Слова вас уже боятся. 😎",
-    "Вы объяснили и победили — легенды Alias! 🏅",
-    "Невероятный финал, так держать! 💪",
+    "You're true masters of words! 🔥",
+    "Brilliant game — every word conquered! 👑",
+    "A dream team! The words are afraid of you now. 😎",
+    "You explained and won — Alias legends! 🏅",
+    "An incredible finish, keep it up! 💪",
 ]
 
 
@@ -79,7 +79,7 @@ def parse_alias_args(
 
 def _winner_congrats(team: GameTeam) -> str:
     return (
-        f"🏆 Побеждает команда {team.emoji} «{team.name}» со счётом {team.score}! "
+        f"🏆 Team {team.emoji} «{team.name}» wins with {team.score} points! "
         f"{random.choice(WINNER_PHRASES)}"
     )
 
@@ -129,23 +129,23 @@ def build_scoreboard_card(
 ) -> dict:
     """Карточка в группе: счёт, составы, кнопки (в setup) / итог (в finished)."""
     if game.status == "setup":
-        subtitle = "Собери команды и нажми «Начать»"
+        subtitle = "Gather the teams and press «Start»"
     elif game.status == "finished":
-        subtitle = "Игра окончена"
+        subtitle = "Game over"
     else:
-        subtitle = f"До {game.target_score} очков · ход: {turn_team.name if turn_team else '…'}"
+        subtitle = f"To {game.target_score} points · turn: {turn_team.name if turn_team else '…'}"
 
     sections = []
     for t in teams:
         players = players_by_team.get(t.id, [])
         roster = ", ".join(_display(p) for p in players) if players else "—"
         sections.append({
-            "header": f"{t.emoji} {t.name} — {t.score} очк. · {len(players)} чел.",
+            "header": f"{t.emoji} {t.name} — {t.score} pts · {len(players)} players",
             "widgets": [{"textParagraph": {"text": roster}}],
         })
 
     finish_button = {
-        "text": "🏁 Закончить игру",
+        "text": "🏁 End game",
         "onClick": {"action": {
             "function": action_url,
             "parameters": [
@@ -159,7 +159,7 @@ def build_scoreboard_card(
         buttons = []
         for t in teams:
             buttons.append({
-                "text": f"{t.emoji} В команду «{t.name}»",
+                "text": f"{t.emoji} Join «{t.name}»",
                 "onClick": {"action": {
                     "function": action_url,
                     "parameters": [
@@ -170,7 +170,7 @@ def build_scoreboard_card(
                 }},
             })
         buttons.append({
-            "text": "▶️ Начать",
+            "text": "▶️ Start",
             "onClick": {"action": {
                 "function": action_url,
                 "parameters": [
@@ -187,9 +187,9 @@ def build_scoreboard_card(
         winner = next((t for t in teams if t.id == game.winner_team_id), None)
         if winner is not None:
             if winner.score >= game.target_score:
-                text = f"🏆 Победила команда {winner.emoji} «{winner.name}»!"
+                text = f"🏆 Team {winner.emoji} «{winner.name}» wins!"
             else:
-                text = f"🏆 Лучший результат — {winner.emoji} «{winner.name}» ({winner.score} очк.)"
+                text = f"🏆 Best result — {winner.emoji} «{winner.name}» ({winner.score} pts)"
             sections.append({"widgets": [{"textParagraph": {"text": text}}]})
 
     return {"cardsV2": [{
@@ -213,18 +213,18 @@ def build_word_card(
     sections = []
     if remaining is not None:
         sections.append({"widgets": [{"textParagraph": {
-            "text": f"⏱ Осталось {remaining} с\n{_countdown_bar(remaining, total)}"
+            "text": f"⏱ {remaining} s left\n{_countdown_bar(remaining, total)}"
         }}]})
     sections.append({"widgets": [{"textParagraph": {"text": word}}]})
     sections.append({"widgets": [{"buttonList": {"buttons": [
-        {"text": "✅ Угадали +1", "onClick": {"action": {
+        {"text": "✅ Guessed +1", "onClick": {"action": {
             "function": action_url,
             "parameters": [
                 {"key": "method", "value": "alias_guess"},
                 {"key": "round_id", "value": str(round_id)},
             ],
         }}},
-        {"text": "⏭️ Пропустить −1", "onClick": {"action": {
+        {"text": "⏭️ Skip −1", "onClick": {"action": {
             "function": action_url,
             "parameters": [
                 {"key": "method", "value": "alias_skip"},
@@ -235,7 +235,7 @@ def build_word_card(
     return {"cardsV2": [{
         "cardId": "aliasWord",
         "card": {
-            "header": {"title": "Объясняй слово! ⏱", "subtitle": "Не называй само слово"},
+            "header": {"title": "Explain the word! ⏱", "subtitle": "Don't say the word itself"},
             "sections": sections,
         },
     }]}
@@ -265,7 +265,7 @@ def build_last_word_card(word: str, round_id: int, teams: list[GameTeam], action
     buttons = []
     for t in teams:
         buttons.append({
-            "text": f"{t.emoji} Угадала «{t.name}» +1",
+            "text": f"{t.emoji} «{t.name}» guessed +1",
             "onClick": {"action": {
                 "function": action_url,
                 "parameters": [
@@ -276,7 +276,7 @@ def build_last_word_card(word: str, round_id: int, teams: list[GameTeam], action
             }},
         })
     buttons.append({
-        "text": "⏭️ Скип −1",
+        "text": "⏭️ Skip −1",
         "onClick": {"action": {
             "function": action_url,
             "parameters": [
@@ -288,7 +288,7 @@ def build_last_word_card(word: str, round_id: int, teams: list[GameTeam], action
     return {"cardsV2": [{
         "cardId": "aliasLastWord",
         "card": {
-            "header": {"title": "Последнее слово! 🔥", "subtitle": "Угадать может любая команда"},
+            "header": {"title": "Last word! 🔥", "subtitle": "Any team can guess it"},
             "sections": [
                 {"widgets": [{"textParagraph": {"text": word}}]},
                 {"widgets": [{"buttonList": {"buttons": buttons}}]},
@@ -309,13 +309,13 @@ def build_confirm_card(
     return {"cardsV2": [{
         "cardId": "aliasConfirm",
         "card": {
-            "header": {"title": "Раунд завершён ✅", "subtitle": "Проверь счёт и подтверди"},
+            "header": {"title": "Round over ✅", "subtitle": "Check the score and confirm"},
             "sections": [
                 {"widgets": [{"textParagraph": {
-                    "text": f"Твоя команда {active_team.emoji} {active_team.name} за раунд: {net:+d}"
+                    "text": f"Your team {active_team.emoji} {active_team.name} this round: {net:+d}"
                 }}]},
                 {"widgets": [{"buttonList": {"buttons": [
-                    {"text": "+1 балл", "onClick": {"action": {
+                    {"text": "+1 point", "onClick": {"action": {
                         "function": action_url,
                         "parameters": [
                             {"key": "method", "value": "alias_adjust"},
@@ -323,7 +323,7 @@ def build_confirm_card(
                             {"key": "delta", "value": "1"},
                         ],
                     }}},
-                    {"text": "−1 балл", "onClick": {"action": {
+                    {"text": "−1 point", "onClick": {"action": {
                         "function": action_url,
                         "parameters": [
                             {"key": "method", "value": "alias_adjust"},
@@ -331,7 +331,7 @@ def build_confirm_card(
                             {"key": "delta", "value": "-1"},
                         ],
                     }}},
-                    {"text": "✅ Подтвердить", "onClick": {"action": {
+                    {"text": "✅ Confirm", "onClick": {"action": {
                         "function": action_url,
                         "parameters": [
                             {"key": "method", "value": "alias_confirm"},
@@ -348,7 +348,7 @@ def build_done_card(text: str, card_id: str = "aliasLastWord") -> dict:
     """Заглушка-итог, заменяющая карточку последнего слова / подтверждения."""
     return {"cardsV2": [{
         "cardId": card_id,
-        "card": {"header": {"title": "Раунд завершён ✅"},
+        "card": {"header": {"title": "Round over ✅"},
                  "sections": [{"widgets": [{"textParagraph": {"text": text}}]}]},
     }]}
 
@@ -630,7 +630,7 @@ async def setup_game(
     teams = await _teams_of_game(db, game.id)
     card = build_scoreboard_card(game, teams, {}, _action_url())
     resp = send_space_message(
-        space_name, text="Игра Alias! Собери команды 🎲", cards_v2=card["cardsV2"],
+        space_name, text="Alias game! Gather your teams 🎲", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
     await db.commit()
@@ -659,8 +659,8 @@ async def setup_test_game(
     )
     db.add(game)
     await db.flush()
-    user_team = GameTeam(game_id=game.id, name="Ты", emoji="🙋")
-    bot_team = GameTeam(game_id=game.id, name="Бот", emoji="🤖")
+    user_team = GameTeam(game_id=game.id, name="You", emoji="🙋")
+    bot_team = GameTeam(game_id=game.id, name="Bot", emoji="🤖")
     db.add(user_team)
     db.add(bot_team)
     await db.flush()
@@ -670,7 +670,7 @@ async def setup_test_game(
     )).scalar_one_or_none()
     if bot is None:
         bot = Profile(
-            workspace_user_id=TEST_BOT_USER_ID, user_email="alias_bot@test.local", user_name="Бот 🤖",
+            workspace_user_id=TEST_BOT_USER_ID, user_email="alias_bot@test.local", user_name="Bot 🤖",
         )
         db.add(bot)
         await db.flush()
@@ -683,7 +683,7 @@ async def setup_test_game(
     players_by_team = await _players_by_team(db, game.id)
     card = build_scoreboard_card(game, teams, players_by_team, _action_url())
     resp = send_space_message(
-        space_name, text="Игра Alias (тест): ты против бота! 🤖", cards_v2=card["cardsV2"],
+        space_name, text="Alias game (test): you vs the bot! 🤖", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
     await db.commit()
@@ -695,14 +695,14 @@ async def join_team(db: AsyncSession, profile: Profile, game_id: int, team_id: i
     """Кнопка «в команду»: записать игрока (или переместить), обновить карточку."""
     game = (await db.execute(select(Game).where(Game.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status != "setup":
-        return {"ok": False, "text": "Игра уже началась 🚀"}
+        return {"ok": False, "text": "Game already started 🚀"}
     team = (await db.execute(
         select(GameTeam).where(GameTeam.id == team_id, GameTeam.game_id == game_id)
     )).scalar_one_or_none()
     if team is None:
-        return {"ok": False, "text": "Команда не найдена 🤷"}
+        return {"ok": False, "text": "Team not found 🤷"}
 
     existing = (await db.execute(
         select(GamePlayer).where(
@@ -725,14 +725,14 @@ async def start_game(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «начать»: проверить команды, запустить первый раунд."""
     game = (await db.execute(select(Game).where(Game.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status != "setup":
-        return {"ok": False, "text": "Игра уже началась 🚀"}
+        return {"ok": False, "text": "Game already started 🚀"}
     teams = await _teams_of_game(db, game_id)
     players_by_team = await _players_by_team(db, game_id)
     for t in teams:
         if not players_by_team.get(t.id):
-            return {"ok": False, "text": f"В команде «{t.name}» никого — добавь хотя бы одного 🙏"}
+            return {"ok": False, "text": f"No one is on team «{t.name}» — add at least one 🙏"}
 
     game.status = "active"
     await db.commit()
@@ -778,9 +778,9 @@ async def guess_word(db: AsyncSession, round_id: int) -> dict:
         select(GameRound).where(GameRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "active":
-        return {"ok": False, "text": "Время вышло! Решай последнее слово 🔥"}
+        return {"ok": False, "text": "Time's up! Resolve the last word 🔥"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
     team = (await db.execute(
         select(GameTeam).where(GameTeam.id == round.team_id)
@@ -805,9 +805,9 @@ async def skip_word(db: AsyncSession, round_id: int) -> dict:
         select(GameRound).where(GameRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status not in ("active", "time_up"):
-        return {"ok": False, "text": "Раунд уже завершён"}
+        return {"ok": False, "text": "Round already over"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
     team = (await db.execute(
         select(GameTeam).where(GameTeam.id == round.team_id)
@@ -840,15 +840,15 @@ async def last_word(db: AsyncSession, round_id: int, team_id: int) -> dict:
         select(GameRound).where(GameRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "time_up":
-        return {"ok": False, "text": "Сейчас не время последнего слова"}
+        return {"ok": False, "text": "It's not time for the last word"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
     winner_team = (await db.execute(
         select(GameTeam).where(GameTeam.id == team_id, GameTeam.game_id == game.id)
     )).scalar_one_or_none()
     if winner_team is None:
-        return {"ok": False, "text": "Команда не найдена 🤷"}
+        return {"ok": False, "text": "Team not found 🤷"}
     await _change_score(db, winner_team.id, 1)
     db.add(GameWordEvent(
         round_id=round.id, word=round.current_word or "",
@@ -872,9 +872,9 @@ async def _end_round(db: AsyncSession, round: GameRound, game: Game) -> dict:
     )).scalar_one_or_none()
     if explainer is not None and active_team is not None:
         card = build_confirm_card(active_team, round_points, round.points_adjustment, _action_url(), round.id)
-        _send_dm_card(explainer, card["cardsV2"], text="Раунд завершён — подтверди счёт ✅")
+        _send_dm_card(explainer, card["cardsV2"], text="Round over — confirm the score ✅")
 
-    return {"ok": True, "cards_v2": build_done_card("Счёт сохранён, проверь личку ✅")["cardsV2"]}
+    return {"ok": True, "cards_v2": build_done_card("Score saved, check your DM ✅")["cardsV2"]}
 
 
 async def adjust_points(db: AsyncSession, round_id: int, delta: int) -> dict:
@@ -883,9 +883,9 @@ async def adjust_points(db: AsyncSession, round_id: int, delta: int) -> dict:
         select(GameRound).where(GameRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "confirming":
-        return {"ok": False, "text": "Раунд уже подтверждён"}
+        return {"ok": False, "text": "Round already confirmed"}
     await db.execute(
         update(GameRound)
         .where(GameRound.id == round.id)
@@ -907,9 +907,9 @@ async def confirm_round(db: AsyncSession, round_id: int) -> dict:
         select(GameRound).where(GameRound.id == round_id)
     )).scalar_one_or_none()
     if round is None:
-        return {"ok": False, "text": "Раунд не найден 🤷"}
+        return {"ok": False, "text": "Round not found 🤷"}
     if round.status != "confirming":
-        return {"ok": False, "text": "Раунд уже подтверждён"}
+        return {"ok": False, "text": "Round already confirmed"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
     return await _finalize_round(db, round, game)
 
@@ -944,7 +944,7 @@ async def _finalize_round(db: AsyncSession, round: GameRound, game: Game) -> dic
     await _start_round(db, game, next_team, players_by_team)
     await _refresh_scoreboard(db, game, turn_team=next_team)
     return {"ok": True, "cards_v2": build_done_card(
-        f"Ходит {next_team.emoji} «{next_team.name}»! Смотри личку 😉", card_id="aliasConfirm",
+        f"It's {next_team.emoji} «{next_team.name}»'s turn! Check your DM 😉", card_id="aliasConfirm",
     )["cardsV2"]}
 
 
@@ -958,17 +958,17 @@ def _winner(game: Game, teams: list[GameTeam]) -> GameTeam | None:
 def _build_finish_summary(game: Game, teams: list[GameTeam]) -> str:
     """Сообщение в группу при досрочном завершении: не доиграли, лидер(ы) ближе всех."""
     if not teams:
-        return "🏁 Игра остановлена — не доиграли до конца"
+        return "🏁 Game stopped — didn't finish"
     top_score = max(t.score for t in teams)
     leaders = [t for t in teams if t.score == top_score]
-    lines = ["🏁 Игра остановлена — не доиграли до конца"]
+    lines = ["🏁 Game stopped — didn't finish"]
     if len(leaders) == 1:
         t = leaders[0]
-        lines.append(f"Ближе всех к победе: {t.emoji} «{t.name}» — {t.score} очк.")
+        lines.append(f"Closest to winning: {t.emoji} «{t.name}» — {t.score} pts")
     else:
         names = ", ".join(f"{t.emoji} «{t.name}»" for t in leaders)
-        lines.append(f"Лидируют поровну: {names} — по {top_score} очк.")
-    lines.append(f"Цель была {game.target_score} очков")
+        lines.append(f"Tied in the lead: {names} — {top_score} pts each")
+    lines.append(f"The goal was {game.target_score} points")
     return "\n".join(lines)
 
 
@@ -976,9 +976,9 @@ async def finish_game(db: AsyncSession, game_id: int) -> dict:
     """Кнопка «🏁 Закончить игру»: завершить досрочно и показать ближайший результат."""
     game = (await db.execute(select(Game).where(Game.id == game_id))).scalar_one_or_none()
     if game is None:
-        return {"ok": False, "text": "Игра не найдена 🤷"}
+        return {"ok": False, "text": "Game not found 🤷"}
     if game.status == "finished":
-        return {"ok": False, "text": "Игра уже завершена"}
+        return {"ok": False, "text": "Game already finished"}
 
     teams = await _teams_of_game(db, game_id)
     top_score = max((t.score for t in teams), default=None)

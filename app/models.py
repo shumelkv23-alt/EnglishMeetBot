@@ -736,7 +736,10 @@ class GameSession(Base):
 
     __tablename__ = "game_sessions"
     __table_args__ = (
-        CheckConstraint("game_type IN ('who_am_i', 'quiplash')", name="valid_game_type"),
+        CheckConstraint(
+            "game_type IN ('who_am_i', 'quiplash', 'hangman', 'millionaire', 'wordle', 'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', 'spy', 'guesspionage')",
+            name="valid_game_type",
+        ),
         CheckConstraint(
             "status IN ('active', 'finished', 'cancelled')", name="valid_game_status"
         ),
@@ -755,6 +758,171 @@ class GameSession(Base):
     )
     topic: Mapped[str | None] = mapped_column(String(255))
     state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class HangmanScore(Base):
+    """Отдельный лидерборд игры «Виселица» (23. hangman_scores).
+
+    Не общий leaderboard_ledger: рейтинг ведётся только среди игроков «Виселицы».
+    `points` — денормализованная сумма (wins*win_points - losses*lose_points),
+    обновляется в hangman.py при каждом исходе партии.
+    """
+
+    __tablename__ = "hangman_scores"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_hangman_score_profile"),
+        Index("idx_hangman_scores_points", "points"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    wins: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    losses: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    points: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class MillionaireScore(Base):
+    """Отдельный рейтинг игры «Кто хочет стать миллионером» (24. millionaire_scores).
+
+    Не общий leaderboard_ledger: рейтинг ведётся только среди игроков «Миллионера».
+    `points` — сумма баллов за полные прохождения; `completed` — число пройденных
+    партий; `best_level` — максимальный достигнутый уровень (0..15).
+    """
+
+    __tablename__ = "millionaire_scores"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_millionaire_score_profile"),
+        Index("idx_millionaire_scores_points", "points"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    completed: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    best_level: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    points: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WeeklyPoll(Base):
+    """Недельный опрос доступности (26. weekly_polls). Одна запись = одна неделя (пн–пт).
+
+    Таблица дней × времён висит в группе всю неделю; голоса складываются
+    в weekly_availability. poll_message_name — имя сообщения в группе
+    (для обновления таблицы на месте через messages.patch).
+    """
+
+    __tablename__ = "weekly_polls"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'finalized')", name="valid_weekly_status"),
+        UniqueConstraint("week_start", name="unique_weekly_poll_week"),
+        Index("idx_weekly_polls_week", "week_start"),
+        Index("idx_weekly_polls_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="active", server_default=text("'active'"), nullable=False
+    )
+    poll_message_name: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WeeklyAvailabilityVote(Base):
+    """Голос за (день, время) в недельном опросе (27. weekly_availability).
+
+    UNIQUE(poll_id, profile_id, day) — нельзя проголосовать за два времени
+    в один и тот же день; можно за разные дни.
+    """
+
+    __tablename__ = "weekly_availability"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "profile_id", "day", name="unique_weekly_day_vote"),
+        Index("idx_weekly_availability_poll", "poll_id"),
+        Index("idx_weekly_availability_profile", "profile_id"),
+        Index("idx_weekly_availability_day_time", "poll_id", "day", "time"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    poll_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("weekly_polls.id"), nullable=False
+    )
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    day: Mapped[str] = mapped_column(String(10), nullable=False)  # 'mon'..'fri'
+    time: Mapped[str] = mapped_column(String(10), nullable=False)  # 'HH:MM'
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WordleScore(Base):
+    """Отдельный рейтинг игры Wordle (25. wordle_scores).
+
+    Не общий leaderboard_ledger: рейтинг ведётся только среди игроков Wordle.
+    `points` — сумма баллов за победы (6..1 в зависимости от числа попыток);
+    `best_guesses` — минимальное число попыток за победу (0, если побед не было).
+    """
+
+    __tablename__ = "wordle_scores"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_wordle_score_profile"),
+        Index("idx_wordle_scores_points", "points"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    games_played: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    wins: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    points: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    best_guesses: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

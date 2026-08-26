@@ -13,8 +13,11 @@ import asyncio
 import json
 import logging
 import random
+import re
 
 import requests
+
+from app.services.two_truths_bank import random_two_truths
 
 logger = logging.getLogger(__name__)
 
@@ -144,14 +147,14 @@ async def generate_quiplash_game(count: int = 10) -> dict:
     payload = {
         "model": model,
         "max_tokens": 4096,
-        "system": "Ты генерируешь тему и промпты для игры Quiplash. ОТВЕЧАЙ ТОЛЬКО JSON.",
+        "system": "You generate a topic and prompts for Quiplash. ANSWER IN JSON ONLY.",
         "messages": [
             {
                 "role": "user",
                 "content": (
-                    f"Придумай произвольную тему встречи (1-4 слова, EN) и {count} смешных/"
-                    "жизненных открытых промптов на английском для Quiplash (игроки дают "
-                    "смешные ответы). Верни строго JSON вида "
+                    f"Come up with an arbitrary meeting topic (1-4 words, EN) and {count} funny/"
+                    "relatable open-ended prompts in English for Quiplash (players give funny "
+                    "answers). Return strictly JSON like "
                     '{"topic": "...", "prompts": ["...", "..."]}.'
                 ),
             }
@@ -174,15 +177,15 @@ async def generate_who_am_i_game(count: int) -> dict:
     payload = {
         "model": model,
         "max_tokens": 4096,
-        "system": "Ты генерируешь тему и сущности для игры «Кто я?». ОТВЕЧАЙ ТОЛЬКО JSON.",
+        "system": "You generate a topic and entities for the 'Who Am I?' game. ANSWER IN JSON ONLY.",
         "messages": [
             {
                 "role": "user",
                 "content": (
-                    f"Придумай произвольную тему встречи (1-4 слова, EN) и {count} сущностей "
-                    "на эту тему для игры «Кто я?» (известные люди, профессии, персонажи, "
-                    "предметы, животные). Каждую можно угадать вопросами «да/нет». Верни строго "
-                    'JSON вида {"topic": "...", "entities": ["...", "..."]}.'
+                    f"Come up with an arbitrary meeting topic (1-4 words, EN) and {count} entities "
+                    "on that topic for the 'Who Am I?' game (famous people, professions, characters, "
+                    "objects, animals). Each can be guessed with yes/no questions. Return strictly "
+                    'JSON like {"topic": "...", "entities": ["...", "..."]}.'
                 ),
             }
         ],
@@ -197,6 +200,45 @@ async def generate_who_am_i_game(count: int) -> dict:
     return {"topic": random.choice(_TOPIC_BANK), "entities": _pad(_fallback_entities, count)}
 
 
+async def generate_two_truths_game() -> dict:
+    """Один вызов LLM: набор «Две правды, одна ложь». Возврат {'topic', 'statements', 'lie'}.
+
+    `lie` — 1-based индекс ложного утверждения. При сбое LLM или некорректном
+    ответе — случайный набор из банка (two_truths_bank).
+    """
+    settings = _settings()
+    model = settings.llm_model
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": "You generate 'Two Truths and a Lie' sets. ANSWER IN JSON ONLY.",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Create a 'Two Truths and a Lie' set for English learners: pick a fun topic "
+                    "and write three short statements in English (one sentence each). Exactly two "
+                    "must be TRUE and one FALSE (the lie should be plausible, not obvious). Return "
+                    'strictly JSON like {"topic": "...", "statements": ["...", "...", "..."], '
+                    '"lie": 2} where lie is the 1-based index of the FALSE statement.'
+                ),
+            }
+        ],
+    }
+    content = await _call_llm(payload, timeout=60.0)
+    if content:
+        data = _parse_json(content)
+        statements = [str(s).strip() for s in (data.get("statements") or []) if str(s).strip()]
+        topic = str(data.get("topic") or "").strip() or "Fun facts"
+        try:
+            lie = int(data.get("lie", 0))
+        except (TypeError, ValueError):
+            lie = 0
+        if len(statements) == 3 and 1 <= lie <= 3:
+            return {"topic": topic, "statements": statements, "lie": lie}
+    return random_two_truths()
+
+
 async def judge_guess(secret: str, guess: str) -> bool | None:
     """Вердикт LLM: совпадает ли догадка с секретом. None — ошибка (fallback)."""
     settings = _settings()
@@ -204,13 +246,13 @@ async def judge_guess(secret: str, guess: str) -> bool | None:
     payload = {
         "model": model,
         "max_tokens": 200,
-        "system": "Ты судишь игру «Кто я?». Отвечай только yes или no.",
+        "system": "You judge the 'Who Am I?' game. Answer only yes or no.",
         "messages": [
             {
                 "role": "user",
                 "content": (
-                    f'Загаданная сущность: "{secret}". Игрок предполагает: "{guess}". '
-                    "Это одно и то же? Ответь только yes или no."
+                    f'The hidden entity: "{secret}". The player guesses: "{guess}". '
+                    "Are they the same? Answer only yes or no."
                 ),
             }
         ],
@@ -222,6 +264,123 @@ async def judge_guess(secret: str, guess: str) -> bool | None:
     if lowered.startswith("yes"):
         return True
     if lowered.startswith("no"):
+        return False
+    return None
+
+
+async def judge_translation(
+    source: str,
+    source_lang: str,
+    target_lang: str,
+    reference: str,
+    guess: str,
+) -> dict | None:
+    """Вердикт LLM по переводу. Возврат {'correct': bool, 'note': str} или None.
+
+    LLM принимает синонимы и даёт краткую подсказку, если ответ неверен или неточен.
+    None — при сбое LLM (в сервисе перевод подставляется точное сравнение).
+    """
+    settings = _settings()
+    model = settings.llm_model
+    payload = {
+        "model": model,
+        "max_tokens": 300,
+        "system": "You judge a translation exercise. ANSWER IN JSON ONLY.",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"Source ({source_lang}): \"{source}\"\n"
+                    f"Reference translation ({target_lang}): \"{reference}\"\n"
+                    f"Player's translation: \"{guess}\"\n"
+                    "Judge whether the player's translation is correct and acceptable "
+                    f"(synonyms, rephrasing and minor word-order differences are fine). "
+                    "Return strictly JSON like {\"correct\": true, \"note\": \"\"} where "
+                    "correct is true/false. If correct, note is empty. If incorrect or "
+                    "inaccurate, put a short hint in English in note (5-12 words)."
+                ),
+            }
+        ],
+    }
+    content = await _call_llm(payload, timeout=30.0)
+    if not content:
+        return None
+    data = _parse_json(content)
+    if "correct" not in data:
+        return None
+    correct = bool(data.get("correct"))
+    note = str(data.get("note") or "").strip()
+    return {"correct": correct, "note": note}
+
+
+async def judge_riddle_answer(riddle: str, answer: str, guess: str) -> bool | None:
+    """Вердикт LLM: угадал ли игрок ответ на загадку. None — ошибка.
+
+    Принимает синонимы и перефразировки (например, «keyboard» вместо «piano»).
+    Фолбэк в сервисе — точное совпадение по нормализованной строке.
+    """
+    settings = _settings()
+    model = settings.llm_model
+    payload = {
+        "model": model,
+        "max_tokens": 200,
+        "system": "You judge a riddle answer. Answer only yes or no.",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f'Riddle: "{riddle}"\n'
+                    f'The answer: "{answer}".\n'
+                    f'The player guesses: "{guess}".\n'
+                    "Is the player's guess correct? Accept synonyms and rephrasing. "
+                    "Answer only yes or no."
+                ),
+            }
+        ],
+    }
+    content = await _call_llm(payload, timeout=30.0)
+    if not content:
+        return None
+    lowered = content.strip().lower()
+    if re.search(r"\byes\b", lowered):
+        return True
+    if re.search(r"\bno\b", lowered):
+        return False
+    return None
+
+
+async def is_real_word(word: str) -> bool | None:
+    """Проверка LLM: существует ли такое английское слово. None — ошибка.
+
+    Используется в «Words of Wonders» для бонус-слов (слова не из банка, но
+    собираемые из букв): если LLM подтверждает, слово идёт в счётчик.
+    """
+    settings = _settings()
+    model = settings.llm_model
+    payload = {
+        "model": model,
+        # reasoning-модель (Azati) тратит бюджет на thinking-блок — даём запас,
+        # иначе «yes/no» обрезается и слово не проверяется.
+        "max_tokens": 256,
+        "system": "You verify English words. Answer only yes or no.",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f'Is "{word}" a real English word? Count any valid dictionary word, '
+                    "including plurals, verb forms and informal words. Answer only yes or no."
+                ),
+            }
+        ],
+    }
+    content = await _call_llm(payload, timeout=30.0)
+    if not content:
+        return None
+    lowered = content.strip().lower()
+    # Ищем «yes»/«no» как отдельные слова (модель может отвечать «No, it's not…»).
+    if re.search(r"\byes\b", lowered):
+        return True
+    if re.search(r"\bno\b", lowered):
         return False
     return None
 

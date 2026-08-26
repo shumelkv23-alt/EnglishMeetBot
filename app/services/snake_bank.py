@@ -1,6 +1,6 @@
 """Банк ролей и бытовых проблем для игры Snake Oil / «Змеиное масло».
 
-Роль (persona) — это покупатель с характером («😺 Кот», «🏴☠️ Пират»), которому
+Роль (persona) — это покупатель с характером («😺 Cat», «🏴‍☠️ Pirate»), которому
 продавцы впаривают товар из двух случайных слов. Проблема — бытовая ситуация,
 которую товар должен решить. Проблемы подобраны ПОД роль покупателя, чтобы
 питчинг был смешнее (кот — про банку с кормом, пират — про сокровища и т.п.);
@@ -10,164 +10,164 @@ import random
 
 # Роли покупателей: эмодзи + короткое название.
 PERSONAS: list[str] = [
-    "😺 Кот",
-    "🏴‍☠️ Пират",
-    "👵 Бабушка",
-    "🤖 Робот",
-    "🦖 Динозавр",
-    "🧙 Волшебник",
-    "🕵️ Шпион",
-    "👨‍🚀 Космонавт",
-    "🧟 Зомби",
-    "🦄 Единорог",
-    "🥷 Ниндзя",
-    "🤠 Ковбой",
-    "🧛 Вампир",
-    "🐝 Пчела",
-    "🐻 Медведь",
-    "🦊 Лиса",
-    "🧜‍♀️ Русалка",
-    "👽 Пришелец",
-    "🎅 Дед Мороз",
-    "🤡 Клоун",
+    "😺 Cat",
+    "🏴‍☠️ Pirate",
+    "👵 Granny",
+    "🤖 Robot",
+    "🦖 Dinosaur",
+    "🧙 Wizard",
+    "🕵️ Spy",
+    "👨‍🚀 Astronaut",
+    "🧟 Zombie",
+    "🦄 Unicorn",
+    "🥷 Ninja",
+    "🤠 Cowboy",
+    "🧛 Vampire",
+    "🐝 Bee",
+    "🐻 Bear",
+    "🦊 Fox",
+    "🧜‍♀️ Mermaid",
+    "👽 Alien",
+    "🎅 Santa",
+    "🤡 Clown",
 ]
 
 # Проблемы под конкретную роль покупателя.
 PERSONA_PROBLEMS: dict[str, list[str]] = {
-    "😺 Кот": [
-        "не может открыть банку с кормом",
-        "когтеточка сломалась, а диван уже весь в зацепках",
-        "не может поймать красную точку от лазера",
-        "мяукает по ночам и будит хозяина",
+    "😺 Cat": [
+        "can't open a can of food",
+        "the scratching post broke and the sofa is shredded",
+        "can't catch the laser pointer's red dot",
+        "meows all night and wakes the owner",
     ],
-    "🏴‍☠️ Пират": [
-        "не может найти зарытое сокровище",
-        "деревянная нога скрипит и пугает попугая",
-        "штурвал корабля заедает на поворотах",
-        "попугай молчит и не подсказывает маршрут",
+    "🏴‍☠️ Pirate": [
+        "can't find the buried treasure",
+        "the wooden leg creaks and scares the parrot",
+        "the ship's wheel jams on turns",
+        "the parrot is silent and won't give directions",
     ],
-    "👵 Бабушка": [
-        "потеряла очки и не может их найти",
-        "не может открыть банку с вареньем",
-        "внук не хочет есть кашу",
-        "носки снова потерялись в стирке",
+    "👵 Granny": [
+        "lost her glasses and can't find them",
+        "can't open the jam jar",
+        "the grandkid won't eat the porridge",
+        "the socks went missing in the wash again",
     ],
-    "🤖 Робот": [
-        "разряжается батарея в самый неподходящий момент",
-        "заржавел под дождём",
-        "не может разобраться в человеческих эмоциях",
-        "заедает шарнир на руке",
+    "🤖 Robot": [
+        "the battery dies at the worst moment",
+        "got rusty in the rain",
+        "can't understand human emotions",
+        "a joint in the arm is stuck",
     ],
-    "🦖 Динозавр": [
-        "ручки слишком короткие — не достаёт до спины",
-        "не может дотянуться до верхних веток",
-        "громко топает и пугает соседей",
-        "метеорит опять испортил планы на вечер",
+    "🦖 Dinosaur": [
+        "arms are too short to reach its back",
+        "can't reach the top branches",
+        "stomps loudly and scares the neighbors",
+        "a meteor ruined the evening plans again",
     ],
-    "🧙 Волшебник": [
-        "заклинание всё время даёт сбой",
-        "метла не заводится по утрам",
-        "котёл убегает из лаборатории",
-        "не может найти свой хрустальный шар",
+    "🧙 Wizard": [
+        "the spell keeps misfiring",
+        "the broom won't start in the morning",
+        "the cauldron keeps escaping the lab",
+        "can't find the crystal ball",
     ],
-    "🕵️ Шпион": [
-        "не может подслушать разговор через стену",
-        "записка с шифром промокла",
-        "невидимость не включается вовремя",
-        "нужно незаметно передать сообщение через весь офис",
+    "🕵️ Spy": [
+        "can't eavesdrop through the wall",
+        "the coded note got wet",
+        "invisibility doesn't turn on in time",
+        "needs to pass a message across the office unnoticed",
     ],
-    "👨‍🚀 Космонавт": [
-        "не может поесть суп в невесомости",
-        "скафандр запотевает изнутри",
-        "не может заснуть, болтаясь по кабине",
-        "инопланетный сувенир разбудил команду",
+    "👨‍🚀 Astronaut": [
+        "can't eat soup in zero gravity",
+        "the spacesuit fogs up inside",
+        "can't fall asleep floating around the cabin",
+        "an alien souvenir woke the whole crew",
     ],
-    "🧟 Зомби": [
-        "рука всё время отваливается",
-        "не может догнать людей — слишком медленный",
-        "мозги в холодильнике протухли",
-        "боится рассвета и не успевает домой",
+    "🧟 Zombie": [
+        "an arm keeps falling off",
+        "too slow to catch people",
+        "the brains in the fridge went bad",
+        "afraid of dawn and can't make it home",
     ],
-    "🦄 Единорог": [
-        "рог царапает дверные косяки",
-        "радуга получается кривой",
-        "грива всё время путается",
-        "не может проткнуть рогом арбуз на пикнике",
+    "🦄 Unicorn": [
+        "the horn scratches every doorframe",
+        "the rainbow comes out crooked",
+        "the mane keeps tangling",
+        "can't poke the watermelon with its horn at the picnic",
     ],
-    "🥷 Ниндзя": [
-        "не может бесшумно открыть скрипучую дверь",
-        "звёздочка-сюрикен застряла в потолке",
-        "тень выдаёт его на свету",
-        "не может подкрасться по хрустящему снегу",
+    "🥷 Ninja": [
+        "can't open the creaky door silently",
+        "a throwing star is stuck in the ceiling",
+        "its shadow gives it away in the light",
+        "can't sneak through crunchy snow",
     ],
-    "🤠 Ковбой": [
-        "лошадь не слушается и уходит без него",
-        "шляпа всё время слетает на скаку",
-        "револьвер заклинило перед дуэлью",
-        "не может загнать стадо в загон",
+    "🤠 Cowboy": [
+        "the horse won't listen and leaves without him",
+        "the hat keeps flying off at a gallop",
+        "the revolver jammed before the duel",
+        "can't drive the herd into the pen",
     ],
-    "🧛 Вампир": [
-        "не может открыть шторы днём",
-        "чеснок в супе портит аппетит",
-        "не может посмотреться в зеркало перед выходом",
-        "гроб скрипит и мешает спать",
+    "🧛 Vampire": [
+        "can't open the curtains during the day",
+        "garlic in the soup ruins the appetite",
+        "can't check the mirror before going out",
+        "the coffin creaks and keeps it awake",
     ],
-    "🐝 Пчела": [
-        "не может найти дорогу обратно в улей",
-        "цветок закрылся и нектар пропал",
-        "мед слишком липкий и капает на всё",
-        "сосед по улью занял всю соту",
+    "🐝 Bee": [
+        "can't find its way back to the hive",
+        "the flower closed and the nectar is gone",
+        "the honey is too sticky and drips everywhere",
+        "a hive-mate took the whole comb",
     ],
-    "🐻 Медведь": [
-        "не может залезть на дерево за мёдом",
-        "берлога промерзает зимой",
-        "не может открыть улей без укусов",
-        "проснулся от спячки слишком рано",
+    "🐻 Bear": [
+        "can't climb the tree for honey",
+        "the den freezes in winter",
+        "can't open the hive without getting stung",
+        "woke up from hibernation too early",
     ],
-    "🦊 Лиса": [
-        "не может достать виноград с высокой ветки",
-        "хвост всё время пачкается в грязи",
-        "не может тихо пробраться в курятник",
-        "хитрость не срабатывает на новых соседях",
+    "🦊 Fox": [
+        "can't reach the grapes on the high branch",
+        "the tail keeps getting muddy",
+        "can't sneak into the henhouse quietly",
+        "cunning doesn't work on the new neighbors",
     ],
-    "🧜‍♀️ Русалка": [
-        "не может расчесать мокрые волосы",
-        "хвост не помещается в ванну",
-        "не может дотянуться до сокровища на дне",
-        "голос пропадает перед важным концертом",
+    "🧜‍♀️ Mermaid": [
+        "can't comb wet hair",
+        "the tail doesn't fit in the bathtub",
+        "can't reach the treasure at the bottom",
+        "loses its voice before the big concert",
     ],
-    "👽 Пришелец": [
-        "не может понять человеческие обычаи",
-        "антенна не ловит сигнал с корабля",
-        "маскировка под человека не работает",
-        "не может привыкнуть к земной еде",
+    "👽 Alien": [
+        "can't understand human customs",
+        "the antenna won't pick up the ship's signal",
+        "the human disguise doesn't work",
+        "can't get used to Earth food",
     ],
-    "🎅 Дед Мороз": [
-        "не может залезть в камин с мешком",
-        "олени отказываются лететь в снегопад",
-        "не может прочитать списки подарков",
-        "борода застревает в молнии куртки",
+    "🎅 Santa": [
+        "can't fit down the chimney with the sack",
+        "the reindeer refuse to fly in the snowstorm",
+        "can't read the gift lists",
+        "the beard gets stuck in the jacket zipper",
     ],
-    "🤡 Клоун": [
-        "не может рассмешить грустного ребёнка",
-        "нос-клоун всё время отваливается",
-        "не может придумать новый фокус",
-        "ботинки слишком большие и мешают ходить",
+    "🤡 Clown": [
+        "can't make a sad child laugh",
+        "the red nose keeps falling off",
+        "can't think of a new trick",
+        "the shoes are too big to walk in",
     ],
 }
 
 # Общий фолбэк на случай роли без своего списка.
 GENERIC_PROBLEMS: list[str] = [
-    "не может открыть банку",
-    "кофе всё время убегает из турки",
-    "носки теряются в стирке",
-    "будильник не будит по утрам",
-    "не может нарезать лук без слёз",
-    "пылесос не достаёт под диваном",
-    "не может дотянуться до верхней полки",
-    "провода вечно путаются",
-    "ключи всё время теряются",
-    "не может поймать комара ночью",
+    "can't open the jar",
+    "the coffee keeps boiling over",
+    "socks go missing in the wash",
+    "the alarm clock won't wake it up",
+    "can't chop onions without crying",
+    "the vacuum can't reach under the sofa",
+    "can't reach the top shelf",
+    "cords keep tangling",
+    "keys keep getting lost",
+    "can't catch the mosquito at night",
 ]
 
 

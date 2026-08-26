@@ -11,7 +11,7 @@ from app.models import Answer, Profile
 logger = logging.getLogger(__name__)
 
 # question_text для свободных ответов на карточку онбординга (7 вопросов)
-ONBOARDING_QUESTION = "Онбординг-анкета участника (7 вопросов)"
+ONBOARDING_QUESTION = "Participant onboarding survey (7 questions)"
 
 
 def current_week_start() -> date:
