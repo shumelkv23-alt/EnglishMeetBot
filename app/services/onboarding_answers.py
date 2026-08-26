@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Answer, Profile
 from app.services.form_parsing import parse_form_inputs
+from app.services.levels import normalize_level
 from app.services.onboarding import current_week_start, mark_onboarded
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ QUESTIONS = {
     "q5": "5. Why do you usually lose interest or skip activities?",
     "q6": "6. Can we use your answers?",
     "q7": "7. What communication style is more comfortable for you?",
+    "q8": "8. What's your English level?",
 }
 
 # Вопросы, у которых есть поле «Свой вариант»
@@ -114,6 +116,12 @@ async def update_profile_from_onboarding(
     # q6 -> public_consent / anonymize_answers
     q6_value = by_question.get(QUESTIONS["q6"], {}).get("choice", "")
     _apply_consent(profile, q6_value)
+
+    # q8 -> english_level
+    q8_value = by_question.get(QUESTIONS["q8"], {}).get("choice", "")
+    level = normalize_level(q8_value)
+    if level:
+        profile.english_level = level
 
     # Сохраняем всю анкету как JSON для быстрого доступа
     profile.onboarding_answers = {

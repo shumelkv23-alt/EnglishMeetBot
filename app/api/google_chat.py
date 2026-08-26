@@ -16,6 +16,7 @@ from app.services.onboarding import (
     save_answer,
 )
 from app.services.onboarding_answers import save_onboarding_answers
+from app.services.levels import level_choice_items, levels_description
 
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
@@ -1603,6 +1604,27 @@ def _onboarding_card(user_name: str) -> dict:
                                         ],
                                     }
                                 }
+                            ],
+                        },
+                        {
+                            "header": "8. What's your English level?",
+                            "widgets": [
+                                {
+                                    "textParagraph": {
+                                        "text": (
+                                            "We'll use it to send you questions and vocabulary "
+                                            "that fit you.\n" + levels_description()
+                                        )
+                                    }
+                                },
+                                {
+                                    "selectionInput": {
+                                        "name": "q8",
+                                        "label": "Pick your level",
+                                        "type": "RADIO_BUTTON",
+                                        "items": level_choice_items(),
+                                    }
+                                },
                             ],
                         },
                         {
