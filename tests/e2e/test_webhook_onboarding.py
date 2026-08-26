@@ -15,6 +15,7 @@ FORM_INPUTS = {
     "q5": {"stringInputs": {"value": ["busy"]}},
     "q6": {"stringInputs": {"value": ["yes"]}},
     "q7": {"stringInputs": {"value": ["soft"]}},
+    "q8": {"stringInputs": {"value": ["B1"]}},
 }
 
 
@@ -45,20 +46,21 @@ async def _profile_and_answer_count(db, user_id: str) -> tuple[Profile | None, i
     return profile, len(count)
 
 
-async def test_onboarding_submit_saves_7_answers(client, db):
+async def test_onboarding_submit_saves_8_answers(client, db):
     user_id = "users/e2e_onb"
     resp = await client.post("/webhooks/google-chat", json=_button_click(user_id, FORM_INPUTS))
     assert resp.status_code == 200
     body = resp.json()
     assert "hostAppDataAction" in body
     text = body["hostAppDataAction"]["chatDataAction"]["createMessageAction"]["message"]["text"]
-    assert "Спасибо, анкета сохранена!" in text
+    assert "Thanks, your form is saved!" in text
 
     profile, count = await _profile_and_answer_count(db, user_id)
     assert profile is not None
     assert profile.onboarding_completed is True
-    assert count == 7
-    # все 7 вопросов анкеты на месте
+    assert profile.english_level == "B1"
+    assert count == 8
+    # все 8 вопросов анкеты на месте
     questions = {
         a.question_text
         for a in (await db.execute(select(Answer).where(Answer.profile_id == profile.id))).scalars().all()
@@ -72,5 +74,5 @@ async def test_onboarding_repeat_appends_history(client, db):
         resp = await client.post("/webhooks/google-chat", json=_button_click(user_id, FORM_INPUTS))
         assert resp.status_code == 200
     _, count = await _profile_and_answer_count(db, user_id)
-    # история ответов растёт (7 -> 14), а не перезаписывается
-    assert count == 14
+    # история ответов растёт (8 -> 16), а не перезаписывается
+    assert count == 16
