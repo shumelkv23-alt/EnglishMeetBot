@@ -20,9 +20,9 @@ def test_build_card_has_two_questions_and_button():
 def test_questions_for_profile_uses_llm(monkeypatch):
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, avoid=None: "Твой персональный вопрос",
+        lambda interests, level="A2", avoid=None: "Твой персональный вопрос",
     )
-    personal, bank = questions_for_profile(["кино"], date(2026, 8, 24))
+    personal, bank = questions_for_profile(["кино"], date(2026, 8, 24), "B1")
     assert personal == "Твой персональный вопрос"
     assert bank and bank != personal  # общий вопрос из банка
 
@@ -30,10 +30,10 @@ def test_questions_for_profile_uses_llm(monkeypatch):
 def test_questions_for_profile_falls_back_to_bank(monkeypatch):
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, avoid=None: None,
+        lambda interests, level="A2", avoid=None: None,
     )
     from app.services.question_bank import bank_questions_for
 
-    personal, bank = questions_for_profile([], date(2026, 8, 24))
+    personal, bank = questions_for_profile([], date(2026, 8, 24), "B1")
     assert bank == bank_questions_for(date(2026, 8, 24))[0]  # общий = основной банк
     assert personal == bank_questions_for(date(2026, 8, 24))[1]  # fallback = запасной банк

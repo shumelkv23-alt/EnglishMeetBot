@@ -14,14 +14,27 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-_SYSTEM_PROMPT = (
-    "You generate ONE SHORT and EASY conversational question in English for "
-    "English practice at the weekly colleagues' meetup. The question is simple, lively, "
-    "about everyday life (food, movies, travel, hobbies, funny moments) — no "
-    "abstract or philosophical topics. Invites a short 1-2 minute story. "
-    "The person's interests are just one possible guide, don't fixate on them. Return strict JSON of the form "
-    '{"question_text": "question text"}. No comments or markup.'
-)
+_LEVEL_HINTS = {
+    "A1": "Use very simple words and short sentences. Ask about concrete everyday things (food, weather, family, hobbies).",
+    "A2": "Use simple everyday language. Ask about concrete personal experience.",
+    "B1": "Use everyday language; invite opinions and reasons (\"why\").",
+    "B2": "Use natural conversational English; invite opinions, comparisons and hypotheticals.",
+    "C1": "Use sophisticated English; invite nuanced opinions and abstract ideas.",
+    "C2": "Use idiomatic, near-native English; invite complex, abstract discussion.",
+}
+
+
+def _system_prompt(level: str) -> str:
+    """Системный промпт генератора вопроса, адаптированный под уровень."""
+    hint = _LEVEL_HINTS.get(level, _LEVEL_HINTS["B1"])
+    return (
+        "You generate ONE short conversational question in English for English practice "
+        "at the weekly colleagues' meetup. The question is lively, about everyday life "
+        "(food, movies, travel, hobbies, funny moments). Invites a short 1-2 minute story. "
+        "The person's interests are just one possible guide, don't fixate on them. "
+        f"Level: {level}. {hint} "
+        'Return strict JSON of the form {"question_text": "question text"}. No comments or markup.'
+    )
 
 
 def _get_api_key() -> str:
@@ -57,6 +70,7 @@ def generate_personal_question(
     model: str | None = None,
     timeout: float = 10.0,
     avoid: list[str] | None = None,
+    level: str = "A2",
 ) -> str | None:
     """Сгенерировать персональный вопрос по интересам участника.
 
@@ -83,7 +97,7 @@ def generate_personal_question(
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt(level)},
             {"role": "user", "content": user_prompt},
         ],
         "response_format": {"type": "json_object"},

@@ -12,6 +12,7 @@ from app.models import Answer, Profile
 from app.schemas import MessagePayload
 from app.services.form_parsing import parse_form_inputs
 from app.services.llm_questions import generate_personal_question
+from app.services.levels import build_level_card
 from app.services.onboarding import ONBOARDING_QUESTION
 from app.services.onboarding_answers import QUESTIONS as ONBOARDING_QUESTIONS
 from app.services.question_bank import bank_questions_for
@@ -30,15 +31,15 @@ def current_week_start() -> date:
 
 
 def questions_for_profile(
-    interests: list[str] | None, week_start: date, avoid: list[str] | None = None
+    interests: list[str] | None, week_start: date, level: str, avoid: list[str] | None = None
 ) -> tuple[str, str]:
-    """Два вопроса недели: (персональный LLM, общий из банка).
+    """Два вопроса недели: (персональный LLM по уровню, общий из банка).
 
-    Персональный — по интересам, без повтора прошлых (avoid);
+    Персональный — по интересам и уровню, без повтора прошлых (avoid);
     при сбое LLM — запасной банковский (bank[1]). Общий — bank[0], одинаковый для всех.
     """
     bank = bank_questions_for(week_start)
-    personal = generate_personal_question(interests or [], avoid=avoid)
+    personal = generate_personal_question(interests or [], level=level, avoid=avoid)
     if personal is None:
         personal = bank[1]
     return personal, bank[0]
@@ -136,10 +137,23 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         ).scalar_one()
         if answered:
             continue
+        if not p.english_level:
+            # Ещё не указан уровень — сначала спрашиваем его, а не вопрос недели.
+            send_message(
+                p.workspace_user_id,
+                MessagePayload(
+                    text="Quick question about your English level 🙂",
+                    card=build_level_card(None, get_settings().chat_app_audience),
+                ),
+            )
+            sent += 1
+            continue
         past = list((await db.execute(
             select(Answer.question_text).where(Answer.profile_id == p.id)
         )).scalars().all())
-        personal_q, bank_q = await asyncio.to_thread(questions_for_profile, p.interests, week_start, past)
+        personal_q, bank_q = await asyncio.to_thread(
+            questions_for_profile, p.interests, week_start, p.english_level or "A2", past
+        )
         send_message(
             p.workspace_user_id,
             MessagePayload(
