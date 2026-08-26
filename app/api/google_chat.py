@@ -1443,6 +1443,16 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 space = _extract_space_dict(chat_data)
                 return _addon_response(_game_command_response(game, space.get("name", "")))
 
+            # Помощник занятия: вопросы про тему/игры
+            from app.services.lesson_assistant import handle_lesson_query
+
+            space = _extract_space_dict(chat_data)
+            space_name = space.get("name", "")
+            async with AsyncSessionLocal() as db:
+                assistant_reply = await handle_lesson_query(db, raw_text, space_name)
+            if assistant_reply:
+                return _addon_response(assistant_reply)
+
             # Сохраняем профиль и ответ в БД
             user = chat_data.get("user", {})
             workspace_user_id = user.get("name", "")
@@ -1568,6 +1578,17 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if game:
             space = event.get("space", {})
             return JSONResponse(content=_game_command_response(game, space.get("name", "")))
+
+        # Помощник занятия: вопросы про тему/игры
+        from app.services.lesson_assistant import handle_lesson_query
+
+        space = event.get("space", {})
+        space_name = space.get("name", "")
+        async with AsyncSessionLocal() as db:
+            assistant_reply = await handle_lesson_query(db, raw_text, space_name)
+        if assistant_reply:
+            return JSONResponse(content=assistant_reply)
+
         user = event.get("user", {})
         workspace_user_id = user.get("name", "")
         if workspace_user_id:
