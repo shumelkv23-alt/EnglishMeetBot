@@ -17,7 +17,9 @@ from app.services.weekly_poll import finalize_day, submit_poll
 
 pytestmark = pytest.mark.e2e
 
-FORM_1500 = {"day": {"stringInputs": {"value": ["0"]}}, "time": {"stringInputs": {"value": ["15:00"]}}}
+# Голосуем за «сегодня» — прошедшие дни запрещены (submit_poll → past_day).
+TODAY_DOW = datetime.now().weekday()
+FORM_1500 = {"day": {"stringInputs": {"value": [str(TODAY_DOW)]}}, "time": {"stringInputs": {"value": ["15:00"]}}}
 
 
 async def _first_slot(db, poll) -> PollSlot:
@@ -46,7 +48,7 @@ async def test_finalize_creates_meeting_on_quorum(db, today_poll):
         p = await get_or_create_profile(db, f"users/e2e_fin_{i}")
         await submit_poll(db, p, FORM_1500)
 
-    result = await finalize_day(db, today_poll, 0)
+    result = await finalize_day(db, today_poll, TODAY_DOW)
     assert result is not None
     _, time_str = result
     assert time_str == "15:00"
@@ -64,7 +66,7 @@ async def test_finalize_cancels_without_quorum(db, today_poll):
         p = await get_or_create_profile(db, f"users/e2e_cancel_{i}")
         await submit_poll(db, p, FORM_1500)
 
-    result = await finalize_day(db, today_poll, 0)
+    result = await finalize_day(db, today_poll, TODAY_DOW)
     assert result is None
 
     meetings = (
@@ -151,7 +153,7 @@ async def test_poll_counts_reflects_votes(db, today_poll):
     days, times, counts = await poll_counts(db, today_poll.id)
     assert days == [0, 1, 2, 3, 4, 5, 6]
     assert times == ["15:00", "16:00", "17:00"]
-    assert counts[(0, "15:00")] == 1
+    assert counts[(TODAY_DOW, "15:00")] == 1
     assert counts[(0, "16:00")] == 0
 
 

@@ -13,7 +13,8 @@ from app.services.weekly_poll import submit_poll
 
 pytestmark = pytest.mark.e2e
 
-FORM_1500 = {"day": {"stringInputs": {"value": ["0"]}}, "time": {"stringInputs": {"value": ["15:00"]}}}
+TODAY_DOW = datetime.now().weekday()
+FORM_1500 = {"day": {"stringInputs": {"value": [str(TODAY_DOW)]}}, "time": {"stringInputs": {"value": ["15:00"]}}}
 
 
 async def test_send_card_is_idempotent_and_sends_vocab(db, today_poll, monkeypatch):
