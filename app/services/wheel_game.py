@@ -241,7 +241,7 @@ async def setup_wheel(db: AsyncSession, space_name: str) -> dict:
         "result_text": "",
         "scoreboard_message_name": "",
     }
-    session = await games._start_session(db, space_name, "wheel", "Поле чудес", state)
+    session = await games._start_session(db, space_name, "wheel", "Wheel Game", state)
 
     card = build_wheel_card(state, {}, session.id)
     try:
