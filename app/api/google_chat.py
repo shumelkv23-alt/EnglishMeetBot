@@ -226,13 +226,157 @@ def _is_level_command(raw_text: str) -> bool:
 
 
 def _game_command(raw_text: str) -> str | None:
-    """Команда запуска игры из текста сообщения («кто я» / Quiplash)."""
+    """Команда запуска игры из текста сообщения («кто я» / Quiplash / «Поле чудес»)."""
     lowered = raw_text.lower().strip()
     if any(k in lowered for k in ("кто я", "who am i", "угадай кто")):
         return "who_am_i"
     if any(k in lowered for k in ("quiplash", "квиплаш", "квиплэш")):
         return "quiplash"
+    if any(k in lowered for k in ("поле чудес", "field of miracles", "wheel of fortune", "колесо фортуны")):
+        return "wheel"
     return None
+
+
+def _is_learn_command(raw_text: str) -> bool:
+    """Команда «обучение» в личке — курс «Survival English for Calls» (EN + RU)."""
+    lowered = raw_text.lower().strip(" .!?")
+    return any(lowered == t or lowered.startswith(t + " ") for t in (
+        "learn", "course", "обучение", "учёба", "учеба", "учиться", "курс",
+    ))
+
+
+def _is_leveled_command(raw_text: str) -> bool:
+    """Команда «levels»/«уровни» в личке — раздел «English by level» (A/B/C).
+
+    «level»/«уровень» (ед.ч.) занято под показ/смену своего уровня — см. _is_level_command.
+    """
+    lowered = raw_text.lower().strip(" .!?")
+    return any(lowered == t or lowered.startswith(t + " ") for t in (
+        "levels", "уровни", "english by level",
+    ))
+
+
+def _is_info_command(raw_text: str) -> bool:
+    """Команда «info» — карточка о боте и его возможностях (в личке и в группе)."""
+    lowered = raw_text.lower().strip(" .!?")
+    return any(lowered == t or lowered.startswith(t + " ") for t in (
+        "info", "инфо", "help", "помощь", "хелп", "возможности",
+        "команды", "commands", "что ты умеешь", "что умеешь",
+    ))
+
+
+def _info_card(is_dm: bool) -> dict:
+    """Карточка «info»: назначение бота и его возможности (в личке или в группе)."""
+    purpose = (
+        "**EnglishMeetBot** — помощник разговорного английского клуба 🤝\n\n"
+        "Помогаю собирать людей на встречи и проводить их: веду расписание, "
+        "отмечаю участников, запускаю игры и короткие уроки английского — прямо в чате."
+    )
+
+    if is_dm:
+        sections = [
+            {"header": "Зачем я нужен", "widgets": [{"textParagraph": {"text": purpose}}]},
+            {"header": "Обучение 📚", "widgets": [{"textParagraph": {"text": (
+                "`learn` — курс «Survival English for Calls»: фразы для звонков и созвонов\n"
+                "`levels` — английский по уровням A/B/C: темы, лексика, грамматика и тесты"
+            )}}]},
+            {"header": "Игры в личке 🎮", "widgets": [{"textParagraph": {"text": (
+                "`games` — соло-игры против бота:\n"
+                "💀 Hangman · 💎 Millionaire · 🟩 Wordle · 🤥 Two truths & a lie\n"
+                "🧩 Word puzzle · 🔤 Translate it · 🔠 Words of Wonders · 🤔 Riddles"
+            )}}]},
+            {"header": "Прогресс и рейтинги 📈", "widgets": [{"textParagraph": {"text": (
+                "`points` — твои баллы и общий лидерборд\n"
+                "`top` — рейтинги по играм\n"
+                "`анкета` — заполнить анкету уровня и интересов"
+            )}}]},
+        ]
+        subtitle = "что я умею в личке (DM)"
+    else:
+        sections = [
+            {"header": "Зачем я нужен", "widgets": [{"textParagraph": {"text": purpose}}]},
+            {"header": "Сбор людей и расписание 📅", "widgets": [{"textParagraph": {"text": (
+                "`таблица` — недельное расписание встреч (дни × время)\n"
+                "`вопросы` — вопросы недели\n"
+                "Перед встречей присылаю опрос «приду / не приду» и напоминания."
+            )}}]},
+            {"header": "Игры для уроков 🎲", "widgets": [{"textParagraph": {"text": (
+                "`games` — командные игры:\n"
+                "🎲 Alias · 🧪 Snake Oil · 🎮 Quiplash · 🎭 Кто я\n"
+                "🕵️ Spy · 📊 Guesspionage · 🎡 Поле чудес\n"
+                "`alias` / `snake` — быстрый старт"
+            )}}]},
+            {"header": "Рейтинги и баллы 📈", "widgets": [{"textParagraph": {"text": (
+                "`points` — общий лидерборд баллов\n"
+                "`top` — рейтинги по играм\n"
+                "`анкета` — заполнить анкету (в личке)"
+            )}}]},
+        ]
+        subtitle = "что я умею в группе"
+
+    return {"cardsV2": [{
+        "cardId": "info",
+        "card": {
+            "header": {"title": "EnglishMeetBot 🤖", "subtitle": subtitle},
+            "sections": sections,
+        },
+    }]}
+
+
+async def _wheel_setup(space_name: str) -> dict:
+    """Создать партию «Поле чудес» (DB-сессия) и вернуть результат для вебхука."""
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services import wheel_game
+
+            return await wheel_game.setup_wheel(db, space_name)
+    except Exception:
+        logger.exception("wheel_setup_failed space=%s", space_name)
+        return {"text": "Couldn't start the game 🤒"}
+
+
+async def _callready_menu_response(chat_data: dict) -> JSONResponse:
+    """Команда «learn»/«обучение» в личке: показать меню курса (новое сообщение)."""
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    if not workspace_user_id:
+        return _addon_response({"text": "Couldn't identify you 😕"})
+    try:
+        space = _extract_space_dict(chat_data)
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(
+                db, workspace_user_id=workspace_user_id,
+                email=user.get("email"), display_name=user.get("displayName"),
+                chat_space_id=_dm_space_name(space),
+            )
+            from app.services import callready
+            card = await callready.learn_menu(db, profile)
+        return _addon_response({"cardsV2": card["cardsV2"]})
+    except Exception:
+        logger.exception("callready_menu_cmd_failed")
+        return _addon_response({"text": "Couldn't open the course 🤒"})
+
+
+async def _leveled_menu_response(chat_data: dict) -> JSONResponse:
+    """Команда «levels»/«уровни» в личке: показать меню уровней (новое сообщение)."""
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    if not workspace_user_id:
+        return _addon_response({"text": "Couldn't identify you 😕"})
+    try:
+        space = _extract_space_dict(chat_data)
+        async with AsyncSessionLocal() as db:
+            profile = await get_or_create_profile(
+                db, workspace_user_id=workspace_user_id,
+                email=user.get("email"), display_name=user.get("displayName"),
+                chat_space_id=_dm_space_name(space),
+            )
+            from app.services import leveled
+            card = await leveled.level_menu(db, profile)
+        return _addon_response({"cardsV2": card["cardsV2"]})
+    except Exception:
+        logger.exception("leveled_menu_cmd_failed")
+        return _addon_response({"text": "Couldn't open English by level 🤒"})
 
 
 def _alias_response(result: dict) -> JSONResponse:
@@ -566,6 +710,7 @@ def _games_menu_card(action_url: str) -> dict:
                 _btn("🎭 Who am I?", "menu_who_am_i"),
                 _btn("🕵️ Spy", "menu_spy"),
                 _btn("📊 Guesspionage", "menu_guesspionage"),
+                _btn("🎡 Поле чудес", "menu_wheel"),
             ]}}]}],
         },
     }]}
@@ -629,6 +774,10 @@ async def _handle_games_menu_action(chat_data: dict, common: dict, method: str) 
         game = "spy" if method == "menu_spy" else "guesspionage"
         return _addon_response(_game_command_response(game, space_name))
 
+    # «Поле чудес» — DB-сессия, карточка-лобби постится проактивно.
+    if method == "menu_wheel":
+        return _game_response(await _wheel_setup(space_name))
+
     try:
         async with AsyncSessionLocal() as db:
             from app.services import alias_game, snake_oil
@@ -666,11 +815,206 @@ async def _handle_games_menu_action(chat_data: dict, common: dict, method: str) 
                 if result.get("ok"):
                     return _addon_update_response(text="✅ Game created, see below 👇")
                 return _alias_response(result)
+
+            # Обучение «Survival English for Calls» — меню курса в личке (новое сообщение).
+            if method == "menu_callready":
+                if not workspace_user_id:
+                    return _addon_response({"text": "Couldn't identify you 😕"})
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                )
+                from app.services import callready
+                return _addon_response(await callready.learn_menu(db, profile))
+
+            # «English by level» — меню уровней A/B/C в личке (новое сообщение).
+            if method == "menu_leveled":
+                if not workspace_user_id:
+                    return _addon_response({"text": "Couldn't identify you 😕"})
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                )
+                from app.services import leveled
+                return _addon_response(await leveled.level_menu(db, profile))
     except Exception:
         logger.exception("games_menu_action_failed method=%s", method)
         return _addon_response({"text": "Couldn't start the game 🤒"})
     logger.info("event=BUTTON_CLICKED games_menu_unknown method=%r", method)
     return JSONResponse(content={})
+
+
+async def _handle_callready_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
+    """Клик по кнопкам курса «Survival English for Calls»: навигация, практика, прогресс.
+
+    Все карточки курса имеют единый cardId «callready», поэтому навигация обновляет
+    карточку на месте через _hangman_update.
+    """
+    params = _params_dict(common)
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+
+    def _int(value: str) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services import callready
+
+            if not workspace_user_id:
+                return _addon_response({"text": "Couldn't identify you 😕"})
+            profile = await get_or_create_profile(
+                db, workspace_user_id=workspace_user_id,
+                email=user.get("email"), display_name=user.get("displayName"),
+            )
+
+            if method == "callready_menu":
+                return _hangman_update(await callready.learn_menu(db, profile))
+            if method == "callready_continue":
+                return _hangman_update(await callready.continue_learning(db, profile))
+            if method == "callready_route":
+                return _hangman_update(await callready.show_route(db, profile))
+            if method == "callready_progress":
+                return _hangman_update(await callready.show_progress(db, profile))
+            if method == "callready_phrasebook":
+                return _hangman_update(await callready.show_phrasebook(db, profile))
+            if method == "callready_practice":
+                return _hangman_update(await callready.show_practice(db, profile))
+            if method == "callready_module":
+                return _hangman_update(await callready.show_module(db, profile, params.get("module", "")))
+            if method == "callready_next_module":
+                return _hangman_update(await callready.next_module(db, profile, params.get("module", "")))
+            if method == "callready_prev_module":
+                return _hangman_update(await callready.prev_module(db, profile, params.get("module", "")))
+            if method == "callready_phrasebook_cat":
+                return _hangman_update(await callready.show_phrasebook_cat(db, profile, params.get("cat", "")))
+            if method == "callready_practice_topic":
+                return _hangman_update(await callready.show_topic(db, profile, _int(params.get("topic", ""))))
+            if method == "callready_next_task":
+                return _hangman_update(await callready.show_task(
+                    db, profile, _int(params.get("topic", "")), _int(params.get("pos", "")),
+                ))
+            if method == "callready_answer":
+                return _hangman_update(await callready.answer(
+                    db, profile,
+                    _int(params.get("topic", "")),
+                    _int(params.get("pos", "")),
+                    _int(params.get("answer", "")),
+                ))
+            if method == "callready_mtest":
+                return _hangman_update(await callready.show_mtest(
+                    db, profile, params.get("module", ""), _int(params.get("q", "")), _int(params.get("score", "")),
+                ))
+            if method == "callready_mtest_answer":
+                return _hangman_update(await callready.answer_mtest(
+                    db, profile, params.get("module", ""),
+                    _int(params.get("q", "")), _int(params.get("answer", "")), _int(params.get("score", "")),
+                ))
+            if method == "callready_btest":
+                return _hangman_update(await callready.show_btest(
+                    db, profile, params.get("block", ""), _int(params.get("q", "")), _int(params.get("score", "")),
+                ))
+            if method == "callready_btest_answer":
+                return _hangman_update(await callready.answer_btest(
+                    db, profile, params.get("block", ""),
+                    _int(params.get("q", "")), _int(params.get("answer", "")), _int(params.get("score", "")),
+                ))
+    except Exception:
+        logger.exception("callready_action_failed method=%s", method)
+        return _addon_response({"text": "Error processing that action 🤕"})
+    logger.info("event=BUTTON_CLICKED callready_unknown method=%r", method)
+    return JSONResponse(content={})
+
+
+async def _handle_leveled_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
+    """Клик по кнопкам раздела «English by level»: уровень → тема → тест.
+
+    Все карточки раздела имеют единый cardId «leveled», поэтому навигация обновляет
+    карточку на месте через _hangman_update.
+    """
+    params = _params_dict(common)
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+
+    def _int(value: str) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services import leveled
+
+            if not workspace_user_id:
+                return _addon_response({"text": "Couldn't identify you 😕"})
+            profile = await get_or_create_profile(
+                db, workspace_user_id=workspace_user_id,
+                email=user.get("email"), display_name=user.get("displayName"),
+            )
+
+            if method == "leveled_menu":
+                return _hangman_update(await leveled.level_menu(db, profile))
+            if method == "leveled_themes":
+                return _hangman_update(await leveled.show_themes(db, profile, params.get("level", "")))
+            if method == "leveled_theme":
+                return _hangman_update(await leveled.show_theme(db, profile, params.get("theme", "")))
+            if method == "leveled_progress":
+                return _hangman_update(await leveled.show_progress(db, profile))
+            if method == "leveled_test":
+                return _hangman_update(await leveled.show_test(
+                    db, profile, params.get("theme", ""), _int(params.get("q", "")), _int(params.get("score", "")),
+                ))
+            if method == "leveled_test_answer":
+                return _hangman_update(await leveled.answer_test(
+                    db, profile, params.get("theme", ""),
+                    _int(params.get("q", "")), _int(params.get("answer", "")), _int(params.get("score", "")),
+                ))
+    except Exception:
+        logger.exception("leveled_action_failed method=%s", method)
+        return _addon_response({"text": "Error processing that action 🤕"})
+    logger.info("event=BUTTON_CLICKED leveled_unknown method=%r", method)
+    return JSONResponse(content={})
+
+
+async def _handle_wheel_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
+    """Обработать клик по карточке «Поле чудес» (join/start/spin/guess/finish)."""
+    params = _params_dict(common)
+    user = chat_data.get("user", {})
+    workspace_user_id = user.get("name", "")
+    form_inputs = common.get("formInputs", {}) or {}
+    game_id = int(params.get("game_id", 0) or 0)
+    if not game_id:
+        return _game_response({"text": "Game not found 🤷"})
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services import wheel_game
+
+            if method == "wheel_join":
+                if not workspace_user_id:
+                    return _game_response({"text": "Couldn't identify you 😕"})
+                profile = await get_or_create_profile(
+                    db, workspace_user_id=workspace_user_id,
+                    email=user.get("email"), display_name=user.get("displayName"),
+                )
+                result = await wheel_game.join_wheel(db, profile, game_id)
+            elif method == "wheel_start":
+                result = await wheel_game.start_wheel_game(db, game_id)
+            elif method == "wheel_spin":
+                result = await wheel_game.wheel_spin(db, game_id, workspace_user_id)
+            elif method == "wheel_guess":
+                result = await wheel_game.wheel_guess(db, game_id, workspace_user_id, form_inputs)
+            elif method == "wheel_finish":
+                result = await wheel_game.finish_wheel(db, game_id)
+            else:
+                return JSONResponse(content={})
+            return _game_response(result)
+    except Exception:
+        logger.exception("wheel_action_failed method=%s", method)
+        return _game_response({"text": "Error processing that action 🤕"})
 
 
 _google_request = grequests.Request()
@@ -1394,6 +1738,8 @@ def _dm_games_menu_card(action_url: str) -> dict:
                 _btn("🔤 Translate it", "menu_translation"),
                 _btn("🔠 Words of Wonders", "menu_wow"),
                 _btn("🤔 Riddles", "menu_riddles"),
+                _btn("🎓 Learn English (calls)", "menu_callready"),
+                _btn("🌍 English by level", "menu_leveled"),
             ]}}]}],
         },
     }]}
@@ -1999,6 +2345,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if method in (
                 "menu_alias", "menu_alias_create", "menu_snake", "menu_quiplash",
                 "menu_who_am_i", "menu_spy", "menu_guesspionage",
+                "menu_wheel", "menu_callready", "menu_leveled",
             ):
                 return await _handle_games_menu_action(chat_data, common, method)
             if method in (
@@ -2038,6 +2385,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 "riddle_next", "riddle_finish",
             ):
                 return await _handle_riddles_action(chat_data, common, method)
+            if method in ("wheel_join", "wheel_start", "wheel_spin", "wheel_guess", "wheel_finish"):
+                return await _handle_wheel_action(chat_data, common, method)
+            if method.startswith("callready_"):
+                return await _handle_callready_action(chat_data, common, method)
+            if method.startswith("leveled_"):
+                return await _handle_leveled_action(chat_data, common, method)
             if method.startswith("game_") or method == "who_finish":
                 return await _handle_game_action(chat_data, common, method)
             logger.info("event=BUTTON_CLICKED format=addon method=%r", method)
@@ -2055,6 +2408,17 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if _is_onboarding_command(raw_text):
                 space = _extract_space_dict(chat_data)
                 return _addon_response(_onboarding_response_payload(user_name, space))
+
+            # Инфо о боте — работает и в личке, и в группе.
+            if _is_info_command(raw_text):
+                space = _extract_space_dict(chat_data)
+                return _addon_response(_info_card(_space_is_dm(space)))
+
+            # Курсы английского — только в личке.
+            if _is_learn_command(raw_text) and _space_is_dm(_extract_space_dict(chat_data)):
+                return await _callready_menu_response(chat_data)
+            if _is_leveled_command(raw_text) and _space_is_dm(_extract_space_dict(chat_data)):
+                return await _leveled_menu_response(chat_data)
 
             # Команда лидерборда: меню рейтингов по играм.
             if _is_leaderboard_command(raw_text):
@@ -2210,6 +2574,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if _is_onboarding_command(raw_text):
             space = event.get("space", {})
             return JSONResponse(content=_onboarding_response_payload(user_name, space))
+        if _is_info_command(raw_text):
+            return JSONResponse(content=_info_card(_space_is_dm(event.get("space", {}))))
+        if _is_learn_command(raw_text) and _space_is_dm(event.get("space", {})):
+            return await _callready_menu_response(event)
+        if _is_leveled_command(raw_text) and _space_is_dm(event.get("space", {})):
+            return await _leveled_menu_response(event)
         if _is_leaderboard_command(raw_text):
             return JSONResponse(content=_ratings_menu_card(settings.chat_app_audience))
         if _is_points_command(raw_text):
@@ -2377,6 +2747,7 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if method in (
             "menu_alias", "menu_alias_create", "menu_snake", "menu_quiplash",
             "menu_who_am_i", "menu_spy", "menu_guesspionage",
+            "menu_wheel", "menu_callready", "menu_leveled",
         ):
             common = {
                 "parameters": action.get("parameters") or [],
@@ -2424,6 +2795,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             "riddle_next", "riddle_finish",
         ):
             return await _handle_riddles_action(event, common, method)
+        if method in ("wheel_join", "wheel_start", "wheel_spin", "wheel_guess", "wheel_finish"):
+            return await _handle_wheel_action(event, common, method)
+        if method.startswith("callready_"):
+            return await _handle_callready_action(event, common, method)
+        if method.startswith("leveled_"):
+            return await _handle_leveled_action(event, common, method)
         if method.startswith("game_") or method == "who_finish":
             common = {
                 "parameters": action.get("parameters") or [],

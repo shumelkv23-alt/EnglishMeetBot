@@ -386,7 +386,7 @@ class LeaderboardLedger(Base):
             "profile_id", "meeting_instance_id", "event_type", name="unique_ledger_entry"
         ),
         CheckConstraint(
-            "event_type IN ('attendance', 'answer', 'streak', 'mvp', 'bonus', 'game')",
+            "event_type IN ('attendance', 'answer', 'streak', 'mvp', 'bonus', 'game', 'learning')",
             name="valid_event_type",
         ),
         CheckConstraint("points != 0", name="valid_points"),
@@ -731,7 +731,7 @@ class GameSession(Base):
     __table_args__ = (
         CheckConstraint(
             "game_type IN ('who_am_i', 'quiplash', 'hangman', 'millionaire', 'wordle', "
-            "'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles')",
+            "'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', 'wheel')",
             name="valid_game_type",
         ),
         CheckConstraint(
@@ -860,6 +860,59 @@ class WordleScore(Base):
     best_guesses: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0"), nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CallreadyProgress(Base):
+    """Прогресс курса «Survival English for Calls» в личке (callready_progress).
+
+    Одна строка на профиль (UNIQUE profile_id). Всё живое состояние курса лежит
+    в JSONB `state`: текущий модуль, завершённые модули, верные грамматические
+    ответы, просмотренный фразбук. Баллы — в leaderboard_ledger (event_type 'learning').
+    """
+
+    __tablename__ = "callready_progress"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_callready_progress_profile"),
+        Index("idx_callready_progress_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class LeveledProgress(Base):
+    """Прогресс раздела «English by level» в личке (leveled_progress).
+
+    Одна строка на профиль (UNIQUE profile_id). Всё живое состояние в JSONB `state`:
+    изученные темы, пройденные тесты тем. Баллы — в leaderboard_ledger (event_type 'learning').
+    """
+
+    __tablename__ = "leveled_progress"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="unique_leveled_progress_profile"),
+        Index("idx_leveled_progress_profile", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("profiles.id"), nullable=False
+    )
+    state: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSONB))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

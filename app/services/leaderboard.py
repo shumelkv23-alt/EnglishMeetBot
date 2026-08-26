@@ -76,6 +76,7 @@ async def get_leaderboard(db: AsyncSession, top_n: int = 10) -> list[dict]:
             func.sum(LeaderboardLedger.points).label("total"),
         )
         .join(LeaderboardLedger, LeaderboardLedger.profile_id == Profile.id)
+        .where(~Profile.user_email.like("%@test.local"))
         .group_by(Profile.id, Profile.user_name)
         .order_by(func.sum(LeaderboardLedger.points).desc(), Profile.user_name.asc())
         .limit(top_n)
