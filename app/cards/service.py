@@ -177,7 +177,8 @@ def _assemble_card(card_type: CardType, difficulty: str, content: dict, generate
 
 
 async def generate_card_content(
-    db: AsyncSession, meeting: MeetingInstance, space_id: str
+    db: AsyncSession, meeting: MeetingInstance, space_id: str,
+    theme_override: str | None = None,
 ) -> tuple[CardType, dict]:
     """Полный пайплайн генерации карточки. Возвращает (тип, content-словарь)."""
     profiles = await _attendee_profiles(db, meeting)
@@ -193,7 +194,7 @@ async def generate_card_content(
     from app.services.week_theme import week_theme
     from app.services.weekly_poll import week_monday
 
-    theme = week_theme(week_monday(meeting.scheduled_start.date()))
+    theme = theme_override or week_theme(week_monday(meeting.scheduled_start.date()))
 
     bank_payload = await pick_bank_payload(db, card_type.id)
     content = build_template_content(card_type.name, bank_payload, difficulty)
@@ -233,6 +234,32 @@ async def generate_card_content(
         meeting.id, card_type.name, card_content["meta"]["generated_by"],
     )
     return card_type, card_content
+
+
+async def regenerate_card_for_topic(
+    db: AsyncSession, meeting: MeetingInstance, space_id: str, new_topic: str
+) -> None:
+    """Перегенерировать карточку занятия под новую тему и разослать (проактивно).
+
+    Отправляет карточку в группу + обновлённую лексику в личку участникам.
+    Новый Card сохраняется в историю — запрос «topic» потом покажет новую тему.
+    """
+    _, content = await generate_card_content(db, meeting, space_id, theme_override=new_topic)
+
+    topic = str((content.get("main_content") or {}).get("topic") or new_topic)
+    card = build_card_message(content, meeting.scheduled_start)
+
+    from app.services.chat_sender import send_message as send_space_message
+
+    await asyncio.to_thread(
+        send_space_message, space_id, text=f"📚 New topic: {topic}", cards_v2=card["cardsV2"]
+    )
+
+    # Обновлённую лексику шлём в личку тем, кто на этой встрече.
+    from app.services.vocab import send_vocab_dms
+
+    profiles = await _attendee_profiles(db, meeting)
+    await send_vocab_dms(db, meeting, topic, profiles)
 
 
 def build_card_message(content: dict, scheduled_start: datetime | None = None) -> dict:

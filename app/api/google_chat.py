@@ -2134,7 +2134,8 @@ async def _run_onboarding(space_name: str, space: dict) -> dict:
     # Анкета в личку тем, у кого уже есть DM с ботом
     for ws in plan["dm"]:
         try:
-            send_message(
+            await asyncio.to_thread(
+                send_message,
                 ws,
                 MessagePayload(
                     text="Hi! Fill in a short form 🙌",
@@ -2148,7 +2149,8 @@ async def _run_onboarding(space_name: str, space: dict) -> dict:
     if plan["mention"]:
         mentions = " ".join(f"<{m}>" for m in plan["mention"])
         try:
-            send_text(
+            await asyncio.to_thread(
+                send_text,
                 space_name,
                 f"{mentions} — DM me to fill in the form 👋",
             )
@@ -2176,12 +2178,13 @@ async def _handle_member_added(space_name: str, member_name: str) -> None:
             if profile.onboarding_completed:
                 return  # уже онборднут — не трогаем
             if profile.chat_space_id:
-                send_message(
+                await asyncio.to_thread(
+                    send_message,
                     member_name,
                     MessagePayload(text="Hi! Fill in a short form 🙌", card=_onboarding_card("friend")),
                 )
             elif space_name:
-                send_text(space_name, f"<{member_name}> — DM me to fill in the form 👋")
+                await asyncio.to_thread(send_text, space_name, f"<{member_name}> — DM me to fill in the form 👋")
     except Exception:
         logger.exception("member_added_onboarding_failed member=%s", member_name)
 
@@ -2513,6 +2516,15 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             await _register_contact(chat_data, space_name)
             # Онбординг: анкета в личку / @упоминание в группу
             await _run_onboarding(space_name, space)
+            # fast_cycle: при добавлении бота в группу запускаем одиночный прогон цикла.
+            from app.scheduler import schedule_fast_cycle, scheduler
+            from app.services.weekly_poll import get_or_create_config
+
+            async with AsyncSessionLocal() as _db:
+                _fast = bool((await get_or_create_config(_db, "fast_cycle", False)).value)
+                _step = int((await get_or_create_config(_db, "fast_cycle_seconds", 600)).value or 600)
+            if _fast and scheduler is not None:
+                schedule_fast_cycle(_step)
             return JSONResponse(content={})
 
         # Нового участника добавили в существующую группу

@@ -292,13 +292,14 @@ async def _get_or_create_progress(db: AsyncSession, profile_id: int) -> LeveledP
 
 
 async def _award(db: AsyncSession, profile_id: int, points: int, reason: str, metadata: dict) -> None:
-    """Начислить баллы в leaderboard_ledger (event_type 'learning')."""
-    try:
-        await leaderboard.award_points(
-            db, profile_id, "learning", points, reason=reason, metadata=metadata,
-        )
-    except Exception:
-        logger.exception("leveled_award_failed profile=%s reason=%s", profile_id, reason)
+    """Начислить баллы в leaderboard_ledger (event_type 'learning').
+
+    Не глотаем исключения: начисление идёт в той же транзакции, что и состояние,
+    поэтому сбой откатит и то и другое — юзер сможет повторить.
+    """
+    await leaderboard.award_points(
+        db, profile_id, "learning", points, reason=reason, metadata=metadata,
+    )
 
 
 async def level_menu(db: AsyncSession, profile: Profile) -> dict:
@@ -331,10 +332,9 @@ async def show_theme(db: AsyncSession, profile: Profile, theme_id: str) -> dict:
         studied.append(theme_id)
     state["themes_studied"] = studied
     row.state = state
-    await db.commit()
     if new_study:
         await _award(db, profile.id, THEME_STUDY_POINTS, f"leveled studied theme {theme_id}", {"theme": theme_id})
-        await db.commit()
+    await db.commit()
     return build_theme_card(theme, state)
 
 
@@ -385,10 +385,9 @@ async def answer_test(
             state["tests_passed"] = passed_list
             awarded = THEME_TEST_POINTS
     row.state = state
-    await db.commit()
     if awarded:
         await _award(db, profile.id, awarded, f"leveled theme test {theme_id}", {"theme": theme_id})
-        await db.commit()
+    await db.commit()
     return _test_result_card(
         title, passed, new_score, len(questions), THEME_TEST_PASS, awarded,
         "leveled_themes", f"↩ Level {theme['level'].upper()}", {"level": theme["level"]},

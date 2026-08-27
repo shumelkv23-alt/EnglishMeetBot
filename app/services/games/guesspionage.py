@@ -159,6 +159,10 @@ def start_guesspionage(session, space_name: str, action_url: str) -> dict:
 
 def submit_guess(session, user_id: str, form_inputs: dict, space_name: str, action_url: str) -> dict:
     """Принять число называющего и огласить его группе (карточка «выше/ниже»)."""
+    if not session.state or "question" not in session.state:
+        return {"text": "This round is over."}  # протухшая карточка
+    if session.state.get("guess") is not None:
+        return {"text": "Your number is already in 🎯"}  # повторный клик
     values = parse_form_inputs(form_inputs).get("guess", [])
     if not values:
         return {"text": "Write a number and press 'Submit'."}
@@ -182,6 +186,10 @@ async def vote(db, session, user_id: str, choice: str, space_name: str) -> dict 
     state = session.state
     if state.get("scored"):
         return None  # раунд уже подсчитан
+    if state.get("guesser") is None:
+        return None  # протухшая карточка / раунд ещё не начат
+    if user_id not in session.players:
+        return None  # голос чужака не считаем
     guesser = state["guesser"]
     if user_id == guesser:
         return {"text": "The guesser doesn't vote."}

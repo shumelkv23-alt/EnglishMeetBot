@@ -59,3 +59,29 @@ async def test_award_points_writes_ledger(db):
     assert rows[0].event_type == "bonus"
     assert rows[0].reason == "guesspionage"
     assert rows[0].meeting_instance_id is None
+
+
+async def test_double_start_second_returns_none():
+    """Двойной старт в один space: ровно одна сессия, вторая None (unique index)."""
+    import asyncio
+
+    from sqlalchemy import delete
+
+    from app.database import AsyncSessionLocal
+    from app.models import GameSession
+    from app.services import party_games
+
+    space = "spaces/e2e_double_start"
+    state = {"word": "cat"}
+
+    async def start():
+        async with AsyncSessionLocal() as s:
+            return await party_games._start_session(s, space, "hangman", "Hangman", state)
+
+    try:
+        r1, r2 = await asyncio.gather(start(), start())
+        assert (r1 is None) != (r2 is None), "ровно одна сессия должна стартовать"
+    finally:
+        async with AsyncSessionLocal() as s:
+            await s.execute(delete(GameSession).where(GameSession.space_name == space))
+            await s.commit()

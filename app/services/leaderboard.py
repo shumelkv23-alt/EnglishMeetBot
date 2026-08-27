@@ -6,7 +6,7 @@ event_type): повторное начисление за ту же встреч
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,21 +27,27 @@ async def award_points(
     """Идемпотентно начислить баллы. Возвращает True, если запись добавлена (не дубль)."""
     if points == 0:
         return False
-    stmt = (
-        pg_insert(LeaderboardLedger)
-        .values(
-            profile_id=profile_id,
-            meeting_instance_id=meeting_instance_id,
-            event_type=event_type,
-            points=points,
-            reason=reason,
-            event_metadata=metadata or {},
-            event_date=datetime.now(timezone.utc),
+    values = dict(
+        profile_id=profile_id,
+        meeting_instance_id=meeting_instance_id,
+        event_type=event_type,
+        points=points,
+        reason=reason,
+        event_metadata=metadata or {},
+        event_date=datetime.now(timezone.utc),
+    )
+    if meeting_instance_id is None:
+        # NULL ≠ NULL в UNIQUE — идемпотентность держит частичный индекс
+        # (profile_id, event_type) WHERE meeting_instance_id IS NULL.
+        conflict = dict(
+            index_elements=["profile_id", "event_type"],
+            index_where=text("meeting_instance_id IS NULL"),
         )
-        .on_conflict_do_nothing(
+    else:
+        conflict = dict(
             index_elements=["profile_id", "meeting_instance_id", "event_type"]
         )
-    )
+    stmt = pg_insert(LeaderboardLedger).values(**values).on_conflict_do_nothing(**conflict)
     result = await db.execute(stmt)
     return bool(result.rowcount)
 

@@ -12,7 +12,6 @@ from app.models import Answer, Profile
 from app.schemas import MessagePayload
 from app.services.form_parsing import parse_form_inputs
 from app.services.llm_questions import generate_personal_question
-from app.services.levels import build_level_card
 from app.services.onboarding import ONBOARDING_QUESTION
 from app.services.onboarding_answers import QUESTIONS as ONBOARDING_QUESTIONS
 from app.services.question_bank import bank_questions_for
@@ -22,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # Ответы на анкету онбординга не считаем «ответами на вопросы недели».
 _ONBOARDING_QUESTIONS = frozenset([ONBOARDING_QUESTION, *ONBOARDING_QUESTIONS.values()])
+
+# Уровень по умолчанию, пока участник не выбрал свой через !level.
+DEFAULT_LEVEL = "B1"
 
 
 def current_week_start() -> date:
@@ -140,30 +142,34 @@ async def send_weekly_questions(db: AsyncSession) -> int:
         ).scalar_one()
         if answered:
             continue
-        if not p.english_level:
-            # Ещё не указан уровень — сначала спрашиваем его, а не вопрос недели.
-            send_message(
-                p.workspace_user_id,
-                MessagePayload(
-                    text="Quick question about your English level 🙂",
-                    card=build_level_card(None, get_settings().chat_app_audience),
-                ),
-            )
-            sent += 1
-            continue
+        level = p.english_level or DEFAULT_LEVEL
         past = list((await db.execute(
             select(Answer.question_text).where(Answer.profile_id == p.id)
         )).scalars().all())
         personal_q, bank_q = await asyncio.to_thread(
-            questions_for_profile, p.interests, week_start, p.english_level or "A2", past, theme
+            questions_for_profile, p.interests, week_start, level, past, theme
         )
-        send_message(
+        await asyncio.to_thread(
+            send_message,
             p.workspace_user_id,
             MessagePayload(
                 text="Question of the week 💭",
                 card=build_weekly_question_card(personal_q, bank_q, get_settings().chat_app_audience),
             ),
         )
+        if not p.english_level:
+            # Уровень не указан — напоминаем выбрать через !level (пока шлём как B1).
+            await asyncio.to_thread(
+                send_message,
+                p.workspace_user_id,
+                MessagePayload(
+                    text=(
+                        "By the way, you haven't picked your English level yet — "
+                        "send !level so I can match questions to you. "
+                        "For now I'm sending you B1-level questions 🙂"
+                    ),
+                ),
+            )
         sent += 1
     logger.info("weekly_questions_sent sent=%s", sent)
     return sent

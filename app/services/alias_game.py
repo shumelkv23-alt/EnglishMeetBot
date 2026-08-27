@@ -14,6 +14,7 @@
 
 Счёт в группе обновляется на месте через messages.patch по scoreboard_message_name.
 """
+import asyncio
 import json
 import logging
 import random
@@ -629,7 +630,8 @@ async def setup_game(
 
     teams = await _teams_of_game(db, game.id)
     card = build_scoreboard_card(game, teams, {}, _action_url())
-    resp = send_space_message(
+    resp = await asyncio.to_thread(
+        send_space_message,
         space_name, text="Alias game! Gather your teams 🎲", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
@@ -682,7 +684,8 @@ async def setup_test_game(
     teams = await _teams_of_game(db, game.id)
     players_by_team = await _players_by_team(db, game.id)
     card = build_scoreboard_card(game, teams, players_by_team, _action_url())
-    resp = send_space_message(
+    resp = await asyncio.to_thread(
+        send_space_message,
         space_name, text="Alias game (solo): you vs the bot! 🤖", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
@@ -764,7 +767,7 @@ async def _start_round(
         return
 
     card = _word_card_for(game, round)
-    name = _send_dm_card(explainer, card["cardsV2"], text="")
+    name = await asyncio.to_thread(_send_dm_card, explainer, card["cardsV2"], text="")
     if name:
         round.word_message_name = name
         await db.commit()
@@ -782,6 +785,8 @@ async def guess_word(db: AsyncSession, round_id: int) -> dict:
     if round.status != "active":
         return {"ok": False, "text": "Time's up! Decide the last word 🔥"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
+    if game is None or game.status != "active":
+        return {"ok": False, "text": "Game is over 🏁"}
     team = (await db.execute(
         select(GameTeam).where(GameTeam.id == round.team_id)
     )).scalar_one_or_none()
@@ -809,6 +814,8 @@ async def skip_word(db: AsyncSession, round_id: int) -> dict:
     if round.status not in ("active", "time_up"):
         return {"ok": False, "text": "Round already finished"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
+    if game is None or game.status != "active":
+        return {"ok": False, "text": "Game is over 🏁"}
     team = (await db.execute(
         select(GameTeam).where(GameTeam.id == round.team_id)
     )).scalar_one_or_none()
@@ -849,6 +856,14 @@ async def last_word(db: AsyncSession, round_id: int, team_id: int) -> dict:
     )).scalar_one_or_none()
     if winner_team is None:
         return {"ok": False, "text": "Team not found 🤷"}
+    # CAS: атомарно пометить раунд обработанным — двойной клик не даст двойной +1.
+    res = await db.execute(
+        update(GameRound)
+        .where(GameRound.id == round_id, GameRound.status == "time_up")
+        .values(status="confirming")
+    )
+    if res.rowcount == 0:
+        return {"ok": False, "text": "Round already processed"}
     await _change_score(db, winner_team.id, 1)
     db.add(GameWordEvent(
         round_id=round.id, word=round.current_word or "",
@@ -872,7 +887,7 @@ async def _end_round(db: AsyncSession, round: GameRound, game: Game) -> dict:
     )).scalar_one_or_none()
     if explainer is not None and active_team is not None:
         card = build_confirm_card(active_team, round_points, round.points_adjustment, _action_url(), round.id)
-        _send_dm_card(explainer, card["cardsV2"], text="Round complete — confirm the score ✅")
+        await asyncio.to_thread(_send_dm_card, explainer, card["cardsV2"], text="Round complete — confirm the score ✅")
 
     return {"ok": True, "cards_v2": build_done_card("Score saved, check your DMs ✅")["cardsV2"]}
 
@@ -911,15 +926,23 @@ async def confirm_round(db: AsyncSession, round_id: int) -> dict:
     if round.status != "confirming":
         return {"ok": False, "text": "Round already confirmed"}
     game = (await db.execute(select(Game).where(Game.id == round.game_id))).scalar_one_or_none()
+    if game is None or game.status != "active":
+        return {"ok": False, "text": "Game is over 🏁"}
     return await _finalize_round(db, round, game)
 
 
 async def _finalize_round(db: AsyncSession, round: GameRound, game: Game) -> dict:
     """Применить правку, завершить раунд, проверить победителя / передать ход."""
+    # CAS: только один подтверждающий клик применяет правку и завершает раунд.
+    res = await db.execute(
+        update(GameRound)
+        .where(GameRound.id == round.id, GameRound.status == "confirming")
+        .values(status="confirmed", confirmed_at=datetime.now(timezone.utc))
+    )
+    if res.rowcount == 0:
+        return {"ok": False, "text": "Round already confirmed"}
     if round.points_adjustment:
         await _change_score(db, round.team_id, round.points_adjustment)
-    round.status = "confirmed"
-    round.confirmed_at = datetime.now(timezone.utc)
     await db.commit()
 
     teams = await _teams_of_game(db, game.id)  # свежий счёт после атомарной правки
@@ -931,7 +954,7 @@ async def _finalize_round(db: AsyncSession, round: GameRound, game: Game) -> dic
         await _refresh_scoreboard(db, game)
         congrats = _winner_congrats(winner)
         try:
-            send_space_message(game.space_id, text=congrats)
+            await asyncio.to_thread(send_space_message, game.space_id, text=congrats)
         except Exception:
             logger.exception("alias_winner_msg_failed game=%s", game.id)
         return {"ok": True, "cards_v2": build_done_card(
@@ -985,13 +1008,19 @@ async def finish_game(db: AsyncSession, game_id: int) -> dict:
     leaders = [t for t in teams if t.score == top_score] if top_score is not None else []
     game.status = "finished"
     game.winner_team_id = leaders[0].id if len(leaders) == 1 else None
+    # Гасим активные раунды, чтобы guess/skip/confirm не продолжали завершённую игру.
+    await db.execute(
+        update(GameRound)
+        .where(GameRound.game_id == game_id, GameRound.status.in_(("active", "time_up")))
+        .values(status="confirmed", ended_at=datetime.now(timezone.utc))
+    )
     await db.commit()
 
     await _refresh_scoreboard(db, game)
 
     summary = _build_finish_summary(game, teams)
     try:
-        send_space_message(game.space_id, text=summary)
+        await asyncio.to_thread(send_space_message, game.space_id, text=summary)
     except Exception:
         logger.exception("alias_finish_msg_failed game=%s", game.id)
 

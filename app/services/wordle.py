@@ -20,7 +20,7 @@ wordle_scores (НЕ общий leaderboard_ledger).
 """
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -240,6 +240,8 @@ async def start_wordle(db: AsyncSession, space_name: str, profile: Profile) -> d
         "word_length": cfg["word_length"],
     }
     session = await party_games._start_session(db, space_name, "wordle", "Wordle", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_wordle_card(state, session.id)
 
 
@@ -285,6 +287,16 @@ async def guess(db: AsyncSession, game_id: int, profile: Profile, text: str) -> 
 
     if raw == word:
         delta = _win_points(guess_count, max_guesses)
+        state["won"] = True
+        # CAS: только один финальный клик начисляет счёт и закрывает сессию.
+        res = await db.execute(
+            update(GameSession)
+            .where(GameSession.id == session.id, GameSession.status == "active")
+            .values(status="finished", state=state)
+        )
+        if res.rowcount == 0:
+            return {"text": "Game already finished"}
+
         score = await _get_or_create_score(db, profile.id)
         score.games_played += 1
         score.wins += 1
@@ -292,19 +304,22 @@ async def guess(db: AsyncSession, game_id: int, profile: Profile, text: str) -> 
         if score.best_guesses == 0 or guess_count < score.best_guesses:
             score.best_guesses = guess_count
 
-        state["won"] = True
-        session.state = state
-        session.status = "finished"
         await db.commit()
         return _result_card(state, session.id, won=True, delta=delta)
 
     if guess_count >= max_guesses:
+        state["won"] = False
+        # CAS: только один финальный клик начисляет счёт и закрывает сессию.
+        res = await db.execute(
+            update(GameSession)
+            .where(GameSession.id == session.id, GameSession.status == "active")
+            .values(status="finished", state=state)
+        )
+        if res.rowcount == 0:
+            return {"text": "Game already finished"}
+
         score = await _get_or_create_score(db, profile.id)
         score.games_played += 1
-
-        state["won"] = False
-        session.state = state
-        session.status = "finished"
         await db.commit()
         return _result_card(state, session.id, won=False, delta=0)
 

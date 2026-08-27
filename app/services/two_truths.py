@@ -125,6 +125,8 @@ async def start_two_truths(db: AsyncSession, space_name: str, profile: Profile) 
         "lie": int(data.get("lie", 1)),
     }
     session = await party_games._start_session(db, space_name, "two_truths", state["topic"], state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_two_truths_card(state, session.id)
 
 

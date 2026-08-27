@@ -328,7 +328,7 @@ async def _show_round(
             return
         except Exception:
             logger.exception("snake_round_patch_failed game=%s", game.id)
-    resp = send_space_message(game.space_id, cards_v2=card["cardsV2"])
+    resp = await asyncio.to_thread(send_space_message, game.space_id, cards_v2=card["cardsV2"])
     game.round_message_name = resp.get("name")
     await db.commit()
 
@@ -427,7 +427,8 @@ async def setup_game(db: AsyncSession, space_name: str, target_score: int) -> di
     db.add(game)
     await db.flush()
     card = build_scoreboard_card(game, [], _action_url())
-    resp = send_space_message(
+    resp = await asyncio.to_thread(
+        send_space_message,
         space_name, text="Snake Oil! 🧪 Gather up and press 'Start'", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
@@ -467,7 +468,8 @@ async def setup_test_game(db: AsyncSession, space_name: str, user_profile: Profi
 
     players = await _players_of_game(db, game.id)
     card = build_scoreboard_card(game, players, _action_url())
-    resp = send_space_message(
+    resp = await asyncio.to_thread(
+        send_space_message,
         space_name, text="Snake Oil (solo): you vs the bot! 🤖", cards_v2=card["cardsV2"],
     )
     game.scoreboard_message_name = resp.get("name")
@@ -563,11 +565,11 @@ async def _start_round(
         if _is_bot(prof):
             continue
         card = build_seller_card(round, offer.word1, offer.word2, _action_url(), solo=solo)
-        _send_dm_card(prof, card["cardsV2"], text="You're the seller! 🎤")
+        await asyncio.to_thread(_send_dm_card, prof, card["cardsV2"], text="You're the seller! 🎤")
 
     if not solo:
         card = build_customer_card(round, offers, _action_url())
-        _send_dm_card(customer, card["cardsV2"], text="Choose who to buy from 🛒")
+        await asyncio.to_thread(_send_dm_card, customer, card["cardsV2"], text="Choose who to buy from 🛒")
 
     logger.info("snake_round_started round=%s game=%s customer=%s", round.id, game.id, customer.id)
 
@@ -628,10 +630,15 @@ async def solo_ready(db: AsyncSession, round_id: int) -> dict:
 
 async def _finalize_vote(db: AsyncSession, round: SnakeRound, game: SnakeGame, winner: Profile) -> dict:
     """Зафиксировать победителя раунда: +1 очко, проверить победу / начать следующий."""
+    # CAS: только один клик фиксирует победителя (двойной клик не даст двойного +1).
+    res = await db.execute(
+        update(SnakeRound)
+        .where(SnakeRound.id == round.id, SnakeRound.status == "active")
+        .values(status="finished", winner_profile_id=winner.id, ended_at=datetime.now(timezone.utc))
+    )
+    if res.rowcount == 0:
+        return {"ok": False, "text": "Round already finished"}
     await _change_score(db, game.id, winner.id, 1)
-    round.winner_profile_id = winner.id
-    round.status = "finished"
-    round.ended_at = datetime.now(timezone.utc)
     await db.commit()
 
     players = await _players_of_game(db, game.id)
@@ -696,7 +703,7 @@ async def finish_game(db: AsyncSession, game_id: int) -> dict:
     await _refresh_scoreboard(db, game)
     summary = _build_finish_summary(game, players)
     try:
-        send_space_message(game.space_id, text=summary)
+        await asyncio.to_thread(send_space_message, game.space_id, text=summary)
     except Exception:
         logger.exception("snake_finish_msg_failed game=%s", game.id)
 

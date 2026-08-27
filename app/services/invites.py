@@ -19,6 +19,12 @@ def build_invite_text(day: str, time: str, theme: str | None) -> str:
     return base
 
 
+def local_time_parts(dt: datetime) -> tuple[str, str]:
+    """(день недели, HH:MM) в таймзоне приложения — для текстов сообщений."""
+    local = dt.astimezone(ZoneInfo(get_settings().app_timezone))
+    return local.strftime("%a"), local.strftime("%H:%M")
+
+
 def build_escalation_text() -> str:
     """Сообщение организатору при не набранном кворуме (REQ-9.5, REQ-3.5)."""
     return (
@@ -28,8 +34,10 @@ def build_escalation_text() -> str:
 
 
 # --- БД-часть ---
+import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,7 +79,7 @@ async def handle_time_finalized(
 
     space_id = await _config_value(db, "space_id", "")
     if space_id:
-        send_text(space_id, f"🗓️ {text}")
+        await asyncio.to_thread(send_text, space_id, f"🗓️ {text}")
 
     sch = _scheduler()
     if scheduled_start is not None and sch is not None:
@@ -123,14 +131,11 @@ async def _send_reminder(instance_id: str) -> None:
         if meeting is None:
             logger.warning("reminder_no_meeting instance=%s", instance_id)
             return
-        text = build_invite_text(
-            meeting.scheduled_start.strftime("%a"),
-            meeting.scheduled_start.strftime("%H:%M"),
-            None,
-        )
+        day, time_ = local_time_parts(meeting.scheduled_start)
+        text = build_invite_text(day, time_, None)
         space_id = await _config_value(db, "space_id", "")
         if space_id:
-            send_text(space_id, f"⏰ English meetup in an hour!\n\n{text}")
+            await asyncio.to_thread(send_text, space_id, f"⏰ English meetup in an hour!\n\n{text}")
         logger.info("reminder_sent instance=%s", instance_id)
 
 

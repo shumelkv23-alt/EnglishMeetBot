@@ -19,14 +19,25 @@ CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 CHAT_API_BASE = "https://chat.googleapis.com/v1"
 
 
+_CREDENTIALS: service_account.Credentials | None = None
+
+
 def _bot_credentials() -> service_account.Credentials:
-    """Креды сервисного аккаунта с scope chat.bot (app-auth)."""
-    settings = get_settings()
-    creds = service_account.Credentials.from_service_account_file(
-        settings.google_sa_key_file, scopes=[CHAT_BOT_SCOPE]
-    )
-    creds.refresh(GoogleRequest())
-    return creds
+    """Креды сервисного аккаунта с scope chat.bot (app-auth).
+
+    Кэшируются в модуле: чтение ключа с диска и сетевой refresh не должны
+    повторяться на каждый вызов (google-auth сам обновляет токен по истечении).
+    """
+    global _CREDENTIALS
+    if _CREDENTIALS is None:
+        settings = get_settings()
+        creds = service_account.Credentials.from_service_account_file(
+            settings.google_sa_key_file, scopes=[CHAT_BOT_SCOPE]
+        )
+        # Первичный refresh обязателен: без него creds.token == None → 401.
+        creds.refresh(GoogleRequest())
+        _CREDENTIALS = creds
+    return _CREDENTIALS
 
 
 def send_text(space_name: str, text: str) -> dict:
@@ -106,25 +117,45 @@ def list_space_members(space_name: str) -> list[dict]:
     Возвращает массив memberships, где member.name вида 'users/<id>' у человека.
     """
     creds = _bot_credentials()
-    resp = requests.get(
-        f"{CHAT_API_BASE}/{space_name}/members",
-        headers={"Authorization": f"Bearer {creds.token}"},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json().get("memberships", [])
+    memberships: list[dict] = []
+    page_token: str | None = None
+    while True:
+        params = {"pageToken": page_token} if page_token else None
+        resp = requests.get(
+            f"{CHAT_API_BASE}/{space_name}/members",
+            headers={"Authorization": f"Bearer {creds.token}"},
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        memberships.extend(data.get("memberships", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return memberships
 
 
 def list_bot_spaces() -> list[dict]:
     """Все пространства, где состоит бот (spaces.list, app-auth)."""
     creds = _bot_credentials()
-    resp = requests.get(
-        f"{CHAT_API_BASE}/spaces",
-        headers={"Authorization": f"Bearer {creds.token}"},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json().get("spaces", [])
+    spaces: list[dict] = []
+    page_token: str | None = None
+    while True:
+        params = {"pageToken": page_token} if page_token else None
+        resp = requests.get(
+            f"{CHAT_API_BASE}/spaces",
+            headers={"Authorization": f"Bearer {creds.token}"},
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        spaces.extend(data.get("spaces", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return spaces
 
 
 def find_user_dm_space(user_id: str) -> str:

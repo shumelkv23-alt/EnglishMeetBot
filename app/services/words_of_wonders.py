@@ -205,6 +205,8 @@ async def start(db: AsyncSession, space_name: str, profile: Profile) -> dict:
 
     state = _new_state(random_puzzle())
     session = await party_games._start_session(db, space_name, "words_of_wonders", "Words of Wonders", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_card(state, session.id)
 
 

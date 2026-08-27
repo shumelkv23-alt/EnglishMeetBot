@@ -3,6 +3,8 @@
 Запуск: ./venv/Scripts/python -m scripts.send_questions_now
 """
 import asyncio
+import logging
+import sys
 
 from app.database import AsyncSessionLocal
 from app.services.weekly_questions import send_weekly_questions
@@ -15,4 +17,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # Без этого INFO-логи (message_sent, chat_api_error, STUB SEND) не печатаются,
+    # и по выводу непонятно, ушло ли сообщение реально или в стаб.
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     asyncio.run(main())

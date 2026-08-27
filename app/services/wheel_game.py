@@ -242,6 +242,8 @@ async def setup_wheel(db: AsyncSession, space_name: str) -> dict:
         "scoreboard_message_name": "",
     }
     session = await games._start_session(db, space_name, "wheel", "Wheel Game", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
 
     card = build_wheel_card(state, {}, session.id)
     try:

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cards.activity_matcher import GAMES
 from app.cards.models import Card
 from app.config import get_settings
+from app.models import MeetingInstance
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,9 @@ _GAME_ALIASES: dict[str, str] = {
 }
 
 _TOPIC_WORDS = ("topic", "theme", "what are we discussing", "what are we talking", "тема")
+_NEW_TOPIC_WORDS = ("regenerate", "regenerate topic", "another topic", "change topic",
+                    "new topic", "different topic", "change theme", "другую тему",
+                    "другая тема", "смени тему", "сменить тему", "поменяй тему")
 _RULES_WORDS = ("how to play", "how do you play", "rules", "правила", "как играть")
 _QUESTION_WORDS = ("what", "how", "which", "why", "who", "can we", "tell me", "explain",
                    "что", "как", "почему", "кто", "какой", "зачем", "когда")
@@ -59,6 +63,11 @@ _HELP_WORDS = ("help", "i don't understand", "не понимаю", "не пон
 
 def _is_topic_query(text: str) -> bool:
     return any(w in text.lower() for w in _TOPIC_WORDS)
+
+
+def _is_new_topic_query(text: str) -> bool:
+    """Пользователь просит сменить тему занятия на новую."""
+    return any(w in text.lower() for w in _NEW_TOPIC_WORDS)
 
 
 def _extract_game_for_rules(text: str) -> str | None:
@@ -195,7 +204,7 @@ async def _llm_answer(question: str, context: str) -> str | None:
     """Ответ LLM на свободный вопрос/просьбу (английский, краткий)."""
     payload = {
         "model": get_settings().llm_games_model,
-        "max_tokens": 500,
+        "max_tokens": 800,
         "system": (
             "You are a helpful assistant in an English conversation club. "
             "Always answer in English. The only exception: if the user explicitly asks "
@@ -205,7 +214,7 @@ async def _llm_answer(question: str, context: str) -> str | None:
         ),
         "messages": [{"role": "user", "content": f"Context:\n{context}\n\nUser message: {question}"}],
     }
-    return await _call_llm(payload, timeout=30.0)
+    return await _call_llm(payload, timeout=60.0)
 
 
 async def _llm_suggestions(context: str) -> list[dict] | None:
@@ -272,6 +281,49 @@ def build_suggestions_card(suggestions: list[dict]) -> dict:
     }
 
 
+async def _llm_new_topic(current_topic: str | None) -> str | None:
+    """LLM придумывает одну свежую тему для занятия (не из банка, не текущая)."""
+    settings = get_settings()
+    if not settings.llm_api_key or not settings.llm_games_model:
+        return None
+    avoid = f" Avoid the current topic '{current_topic}'." if current_topic else ""
+    payload = {
+        "model": settings.llm_games_model,
+        "max_tokens": 800,
+        "system": (
+            "You pick ONE fresh, engaging discussion topic for an English conversation club. "
+            "Return only the topic title, up to 8 words, no extra punctuation or commentary."
+        ),
+        "messages": [{
+            "role": "user",
+            "content": f"Suggest a brand-new topic, different from common, overused ones.{avoid}",
+        }],
+    }
+    content = await _call_llm(payload, timeout=60.0)
+    if not content:
+        return None
+    topic = content.strip().strip('"').strip()
+    return topic or None
+
+
+async def _regenerate_async(space_id: str, meeting_id: int, old_topic: str | None) -> None:
+    """Фоновая перегенерация темы: новая тема → карточка + лексика (проактивно)."""
+    from app.cards.service import regenerate_card_for_topic
+    from app.database import AsyncSessionLocal
+
+    try:
+        new_topic = await _llm_new_topic(old_topic)
+        if not new_topic:
+            return
+        async with AsyncSessionLocal() as db:
+            meeting = await db.get(MeetingInstance, meeting_id)
+            if meeting is None:
+                return
+            await regenerate_card_for_topic(db, meeting, space_id, new_topic)
+    except Exception:
+        logger.exception("regenerate_async_failed space=%s", space_id)
+
+
 async def handle_lesson_query(db: AsyncSession, text: str, space_id: str) -> dict | None:
     """Ответить на сообщение, если оно — про тему/игры/карточку. Иначе None.
 
@@ -279,6 +331,14 @@ async def handle_lesson_query(db: AsyncSession, text: str, space_id: str) -> dic
     """
     card = await _current_card(db, space_id)
     topic, questions = _topic_and_questions(card)
+
+    if _is_new_topic_query(text):
+        if card is None:
+            return {"text": "There's no activity card yet — finalize the meeting first."}
+        # Генерация темы + карточки + лексики — долгая; уводим в фон,
+        # иначе Google Chat таймаутит вебхук и показывает «бот не отвечает».
+        asyncio.create_task(_regenerate_async(space_id, card.meeting_id, topic))
+        return {"text": "🔄 Generating a new topic — the card and vocabulary will arrive in a moment..."}
 
     if _is_topic_query(text):
         return {"text": _format_topic(topic, questions)}
@@ -293,9 +353,8 @@ async def handle_lesson_query(db: AsyncSession, text: str, space_id: str) -> dic
         if suggestions:
             return build_suggestions_card(suggestions)
 
-    if _is_question(text) or _is_translation_query(text) or _is_help_query(text):
-        answer = await _llm_answer(text.strip(), _card_context(card))
-        if answer:
-            return {"text": answer}
+    answer = await _llm_answer(text.strip(), _card_context(card))
+    if answer:
+        return {"text": answer}
 
     return None

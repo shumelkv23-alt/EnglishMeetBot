@@ -2,6 +2,7 @@
 """Рассылка сообщений: всем, у кого есть DM с ботом (из profiles),
 или всем участникам конкретного space при наличии DM в profiles.
 """
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -22,7 +23,7 @@ async def ensure_profile_dm(db: AsyncSession, profile: Profile) -> bool:
         return True
     from app.services.chat_sender import find_user_dm_space
 
-    space = find_user_dm_space(profile.workspace_user_id or "")
+    space = await asyncio.to_thread(find_user_dm_space, profile.workspace_user_id or "")
     if space:
         profile.chat_space_id = space
         await db.commit()
@@ -53,7 +54,7 @@ async def broadcast_to_writers(db: AsyncSession, text: str) -> dict:
         if not await ensure_profile_dm(db, profile):
             skipped += 1
             continue
-        if send_to_profile(profile, text):
+        if await asyncio.to_thread(send_to_profile, profile, text):
             sent += 1
         else:
             skipped += 1
@@ -70,7 +71,7 @@ async def broadcast_to_space_members(
     """
     from app.services.chat_sender import list_space_members
 
-    memberships = list_space_members(space_name)
+    memberships = await asyncio.to_thread(list_space_members, space_name)
     user_ids = [
         m["member"]["name"]
         for m in memberships
@@ -92,7 +93,7 @@ async def broadcast_to_space_members(
         if not await ensure_profile_dm(db, profile):
             missing += 1
             continue
-        if send_to_profile(profile, text):
+        if await asyncio.to_thread(send_to_profile, profile, text):
             sent += 1
         else:
             skipped += 1

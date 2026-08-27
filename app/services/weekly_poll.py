@@ -168,6 +168,17 @@ def slot_datetime(time_str: str) -> datetime:
     return datetime(2000, 1, 1, int(h), int(m), tzinfo=timezone.utc)
 
 
+def meeting_start_utc(meeting_date: date, slot_start: datetime, tz: ZoneInfo | None = None) -> datetime:
+    """Момент встречи в UTC: слот-время интерпретируем в таймзоне приложения.
+
+    Слот «15:00» в Europe/Minsk — это 15:00 по Минску, а не 15:00 UTC
+    (иначе встреча сдвигалась на +3 часа, и чек-ин/напоминания жили не по тому времени).
+    """
+    tz = tz or ZoneInfo(get_settings().app_timezone)
+    local_start = datetime.combine(meeting_date, slot_start.time(), tzinfo=tz)
+    return local_start.astimezone(timezone.utc)
+
+
 async def active_weekly_poll(db: AsyncSession) -> DailyPoll | None:
     """Активный опрос текущей недели (poll_date = понедельник, status='active')."""
     return (
@@ -314,7 +325,8 @@ async def send_weekly_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
         except Exception:
             logger.exception("poll_card_patch_failed poll=%s", poll.id)
 
-    resp = send_space_message(
+    resp = await asyncio.to_thread(
+        send_space_message,
         space_id, text="When can you meet this week? 🗓️", cards_v2=card["cardsV2"],
     )
     poll.card_message_name = resp.get("name", "")
@@ -368,9 +380,7 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
     best = max(slots, key=lambda s: s.votes_count or 0)
     duration = int((await get_or_create_config(db, "meeting_duration_minutes", 60)).value or 60)
     slot_start = best.slot_start
-    if slot_start.tzinfo is None:
-        slot_start = slot_start.replace(tzinfo=timezone.utc)
-    start = datetime.combine(meeting_date, slot_start.time(), tzinfo=timezone.utc)
+    start = meeting_start_utc(meeting_date, slot_start)
     meeting = MeetingInstance(
         poll_id=poll.id,
         selected_slot_id=best.id,

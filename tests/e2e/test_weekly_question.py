@@ -69,13 +69,16 @@ async def test_submit_weekly_question_rejects_empty(db):
 
 
 async def test_send_weekly_questions_skips_answered(db, monkeypatch):
-    sent = []
-    monkeypatch.setattr("app.services.weekly_questions.send_message", lambda uid, payload: sent.append(uid))
+    sent = []  # кортежи (uid, text)
+    monkeypatch.setattr(
+        "app.services.weekly_questions.send_message",
+        lambda uid, payload: sent.append((uid, payload.text)),
+    )
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, avoid=None: "Вопрос",
+        lambda interests, level=None, avoid=None, theme=None: "Вопрос",
     )
-    # активный профиль с DM
+    # активный профиль с DM, без уровня
     await get_or_create_profile(db, "users/e2e_wq_send", chat_space_id="spaces/e2e_wq")
     # неактивный — не должен попасть в рассылку
     inactive = await get_or_create_profile(db, "users/e2e_wq_inactive", chat_space_id="spaces/e2e_wq")
@@ -83,9 +86,12 @@ async def test_send_weekly_questions_skips_answered(db, monkeypatch):
     await db.commit()
 
     await send_weekly_questions(db)
-    e2e_sent = _e2e_sent(sent)
-    assert e2e_sent == ["users/e2e_wq_send"]
-    assert "users/e2e_wq_inactive" not in e2e_sent
+    uids = [uid for uid, _ in sent if uid.startswith("users/e2e_")]
+    assert set(uids) == {"users/e2e_wq_send"}
+    assert "users/e2e_wq_inactive" not in uids
+    # без уровня — вопрос недели + напоминание выбрать уровень через !level.
+    texts = [text for uid, text in sent if uid == "users/e2e_wq_send"]
+    assert any("!level" in t for t in texts)
 
 
 async def test_send_weekly_questions_skips_after_answer(db, monkeypatch):
@@ -93,7 +99,7 @@ async def test_send_weekly_questions_skips_after_answer(db, monkeypatch):
     monkeypatch.setattr("app.services.weekly_questions.send_message", lambda uid, payload: sent.append(uid))
     monkeypatch.setattr(
         "app.services.weekly_questions.generate_personal_question",
-        lambda interests, avoid=None: "Вопрос",
+        lambda interests, level=None, avoid=None, theme=None: "Вопрос",
     )
     p = await get_or_create_profile(db, "users/e2e_wq_answered", chat_space_id="spaces/e2e_wq")
     await submit_weekly_question(db, p, FORM, "Вопрос", "Вопрос")

@@ -153,6 +153,10 @@ async def vote(db, session, user_id: str, target: str, space_name: str, action_u
     state = session.state
     if state.get("scored"):
         return None  # раунд уже подсчитан
+    if state.get("votes") is None:
+        return None  # протухшая карточка / раунд ещё не начат
+    if user_id not in session.players:
+        return None  # голос чужака не считаем
     votes = state["votes"]
     votes[user_id] = target
     if len(votes) < len(session.players):

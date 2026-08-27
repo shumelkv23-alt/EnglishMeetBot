@@ -165,6 +165,8 @@ async def start_translation(db: AsyncSession, space_name: str, profile: Profile)
     ru, en = random_translation_pair()
     state = _new_round_state(ru, en, random.choice(["ru_en", "en_ru"]), 0, 0, 0, 0)
     session = await party_games._start_session(db, space_name, "translation", "Translate it", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_translation_card(state, session.id)
 
 

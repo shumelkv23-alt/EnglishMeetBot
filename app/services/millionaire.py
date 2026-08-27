@@ -24,7 +24,7 @@ millionaire_scores (НЕ общий leaderboard_ledger): +completion_points за
 import logging
 import random
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -213,6 +213,8 @@ async def start_millionaire(db: AsyncSession, space_name: str, profile: Profile)
         "config": await _load_millionaire_config(db),
     }
     session = await party_games._start_session(db, space_name, "millionaire", "Millionaire", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_millionaire_card(state, session.id)
 
 
@@ -245,14 +247,21 @@ async def answer(db: AsyncSession, game_id: int, profile: Profile, answer_index:
     if answer_index == correct:
         if level >= total:
             # Победа: все вопросы пройдены — начисляем баллы только здесь.
+            state["won"] = True
+            # CAS: только один финальный клик начисляет счёт и закрывает сессию.
+            res = await db.execute(
+                update(GameSession)
+                .where(GameSession.id == session.id, GameSession.status == "active")
+                .values(status="finished", state=state)
+            )
+            if res.rowcount == 0:
+                return {"text": "Game already finished"}
+
             score = await _get_or_create_score(db, profile.id)
             score.completed += 1
             score.best_level = max(score.best_level, total)
             score.points += completion_points
 
-            state["won"] = True
-            session.state = state
-            session.status = "finished"
             await db.commit()
             return _finish_card(state, session.id, won=True, delta=completion_points)
 
@@ -265,12 +274,19 @@ async def answer(db: AsyncSession, game_id: int, profile: Profile, answer_index:
         return build_millionaire_card(state, session.id)
 
     # Неверно: конец игры, баллы НЕ начисляем.
+    state["won"] = False
+    # CAS: только один финальный клик начисляет счёт и закрывает сессию.
+    res = await db.execute(
+        update(GameSession)
+        .where(GameSession.id == session.id, GameSession.status == "active")
+        .values(status="finished", state=state)
+    )
+    if res.rowcount == 0:
+        return {"text": "Game already finished"}
+
     score = await _get_or_create_score(db, profile.id)
     score.best_level = max(score.best_level, level - 1)
 
-    state["won"] = False
-    session.state = state
-    session.status = "finished"
     await db.commit()
     return _finish_card(state, session.id, won=False, delta=0)
 

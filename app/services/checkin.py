@@ -110,6 +110,11 @@ async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, a
     from app.services.inactivity import touch_activity
 
     touch_activity(profile, now)
+    if within:
+        # Баллы за подтверждённое посещение (REQ-9.7) — идемпотентно.
+        from app.services.leaderboard import award_attendance
+
+        await award_attendance(db, profile.id, instance_id)
     await db.commit()
     count = (
         await db.execute(

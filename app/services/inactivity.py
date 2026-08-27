@@ -1,4 +1,5 @@
 """Напоминания о неактивности: определение и сброс «последней активности»."""
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -95,7 +96,7 @@ async def remind_inactive(db: AsyncSession) -> int:
             continue
         if not should_remind(p, now, interval, max_reminders):
             continue
-        send_message(p.workspace_user_id, MessagePayload(text=REMINDER_TEXT))
+        await asyncio.to_thread(send_message, p.workspace_user_id, MessagePayload(text=REMINDER_TEXT))
         p.reminder_count += 1
         p.last_reminder_at = now
         sent += 1

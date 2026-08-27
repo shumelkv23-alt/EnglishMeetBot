@@ -24,6 +24,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -452,7 +453,7 @@ async def _start_session(
     topic: str,
     state: dict,
     meeting_instance_id: int | None = None,
-) -> GameSession:
+) -> GameSession | None:
     session = GameSession(
         space_name=space_name,
         game_type=game_type,
@@ -462,7 +463,12 @@ async def _start_session(
         state=state,
     )
     db.add(session)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Гонка: кто-то уже стартовал активную игру в этом space (unique index).
+        await db.rollback()
+        return None
     await db.refresh(session)
     return session
 
@@ -497,6 +503,8 @@ async def setup_quiplash(db: AsyncSession, space_name: str) -> dict:
         "config": cfg,
     }
     session = await _start_session(db, space_name, "quiplash", topic, state, meeting.id if meeting else None)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
 
     card = build_quiplash_card(state, {}, session.id)
     try:
@@ -568,6 +576,8 @@ async def setup_quiplash_test(db: AsyncSession, space_name: str, user_profile: P
     session = await _start_session(
         db, space_name, "quiplash", topic, state, meeting.id if meeting else None,
     )
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
 
     names = await _resolve_names(db, players)
     card = build_quiplash_card(state, names, session.id)
@@ -698,6 +708,8 @@ async def start_who_am_i(db: AsyncSession, space_name: str, player_ids: list[str
     }
     _set_deadline(state, cfg["turn_timeout"])
     session = await _start_session(db, space_name, "who_am_i", topic, state, meeting.id if meeting else None)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
 
     missed = [uid for uid, entity in secrets.items() if not await _dm_secret(db, uid, entity)]
 
@@ -776,6 +788,8 @@ async def setup_who_am_i_test(db: AsyncSession, space_name: str, user_profile: P
     session = await _start_session(
         db, space_name, "who_am_i", topic, state, meeting.id if meeting else None,
     )
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
 
     # Секрет в личку шлём только человеку (боту DM не нужен).
     missed = [

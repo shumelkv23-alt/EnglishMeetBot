@@ -10,6 +10,7 @@ from alembic import context
 from app.config import get_settings
 from app.database import Base
 from app import models  # noqa: F401 — регистрация моделей в Base.metadata
+import app.cards.models  # noqa: F401 — регистрация карточных моделей
 
 config = context.config
 # URL берём из настроек приложения (.env), а не из alembic.ini

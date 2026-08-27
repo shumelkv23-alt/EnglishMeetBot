@@ -4,6 +4,7 @@ from app.services.lesson_assistant import (
     _format_topic,
     _is_help_query,
     _is_question,
+    _is_new_topic_query,
     _is_suggest_query,
     _is_topic_query,
     _is_translation_query,
@@ -15,6 +16,15 @@ def test_is_topic_query():
     assert _is_topic_query("what is the topic today?")
     assert _is_topic_query("what are we discussing?")
     assert not _is_topic_query("let's play alias")
+
+
+def test_is_new_topic_query():
+    assert _is_new_topic_query("regenerate")
+    assert _is_new_topic_query("regenerate the topic")
+    assert _is_new_topic_query("give me another topic")
+    assert _is_new_topic_query("change topic please")
+    assert _is_new_topic_query("дай другую тему")
+    assert not _is_new_topic_query("what is the topic?")
 
 
 def test_extract_game_for_rules():

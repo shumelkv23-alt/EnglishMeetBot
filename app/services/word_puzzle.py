@@ -128,6 +128,8 @@ async def start_word_puzzle(db: AsyncSession, space_name: str, profile: Profile)
         "shuffled": shuffled,
     }
     session = await party_games._start_session(db, space_name, "word_puzzle", "Word Puzzle", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_word_puzzle_card(state, session.id)
 
 

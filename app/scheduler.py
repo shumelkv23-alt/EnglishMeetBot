@@ -3,10 +3,11 @@
 Джобы ENG-7 (напоминания, check-in окно) добавляются из app/services/invites.py
 и app/services/checkin.py — сюда они не зашиты.
 """
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
@@ -80,11 +81,11 @@ async def _send_day_confirmations(now: datetime | None = None) -> None:
         card = build_confirmation_card(tomorrow_dow, get_settings().chat_app_audience)
         sent = 0
         for p in voters:
-            dm = find_user_dm_space(p.workspace_user_id or "")
+            dm = await asyncio.to_thread(find_user_dm_space, p.workspace_user_id or "")
             if not dm:
                 continue
             try:
-                send_space_message(dm, cards_v2=card["cardsV2"])
+                await asyncio.to_thread(send_space_message, dm, cards_v2=card["cardsV2"])
                 sent += 1
             except Exception:
                 logger.exception("day_confirmation_send_failed profile=%s", p.id)
@@ -114,10 +115,10 @@ async def _poll_new_members() -> None:
             return
         plan = await check_new_members(db, space_id)
         for ws in plan["dm"]:
-            send_message(ws, MessagePayload(text="Привет! Заполни короткую анкету 🙌", card=_onboarding_card("друг")))
+            await asyncio.to_thread(send_message, ws, MessagePayload(text="Привет! Заполни короткую анкету 🙌", card=_onboarding_card("друг")))
         if plan["mention"]:
             mentions = " ".join(f"<{m}>" for m in plan["mention"])
-            send_text(space_id, f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋")
+            await asyncio.to_thread(send_text, space_id, f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋")
 
 
 async def _run_inactivity_reminder() -> None:
@@ -134,6 +135,13 @@ async def _run_close_stale_games() -> None:
     from app.services.party_games import close_stale_games
 
     await close_stale_games()
+
+
+async def _run_fast_cycle(step_seconds: int) -> None:
+    """Джоб fast_cycle: одиночный прогон полного цикла (каждый этап один раз)."""
+    from app.services.fast_cycle import run_cycle
+
+    await run_cycle(step_seconds)
 
 
 async def init_scheduler() -> None:
@@ -154,59 +162,30 @@ async def init_scheduler() -> None:
 
     scheduler = AsyncIOScheduler(timezone=get_settings().app_timezone)
     scheduler.add_job(
-        _run_weekly_poll,
-        "cron",
-        day_of_week="mon",
-        hour=run_h,
-        minute=run_m,
-        id="weekly-poll",
-        replace_existing=True,
-        misfire_grace_time=3600,
+        _run_weekly_poll, "cron", day_of_week="mon", hour=run_h, minute=run_m,
+        id="weekly-poll", replace_existing=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _check_today_quorum,
-        "cron",
-        hour=check_h,
-        minute=0,
-        id="daily-quorum-check",
-        replace_existing=True,
-        misfire_grace_time=3600,
+        _check_today_quorum, "cron", hour=check_h, minute=0,
+        id="daily-quorum-check", replace_existing=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _send_day_confirmations,
-        "cron",
-        hour=confirm_h,
-        minute=0,
-        id="day-confirmations",
-        replace_existing=True,
-        misfire_grace_time=3600,
+        _send_day_confirmations, "cron", hour=confirm_h, minute=0,
+        id="day-confirmations", replace_existing=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _run_weekly_questions,
-        "cron",
-        day_of_week=weekly_day,
-        hour=weekly_hour,
-        minute=0,
-        id="weekly-questions",
-        replace_existing=True,
-        misfire_grace_time=3600,
+        _run_weekly_questions, "cron", day_of_week=weekly_day, hour=weekly_hour, minute=0,
+        id="weekly-questions", replace_existing=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
-        _poll_new_members,
-        "interval",
-        minutes=10,
-        id="onboarding-poll",
-        replace_existing=True,
+        _poll_new_members, "interval", minutes=10,
+        id="onboarding-poll", replace_existing=True,
     )
     scheduler.add_job(
-        _run_inactivity_reminder,
-        "cron",
-        hour=rem_h,
-        minute=0,
-        id="inactivity-reminder",
-        replace_existing=True,
-        misfire_grace_time=3600,
+        _run_inactivity_reminder, "cron", hour=rem_h, minute=0,
+        id="inactivity-reminder", replace_existing=True, misfire_grace_time=3600,
     )
+
     scheduler.add_job(
         _run_close_stale_games,
         "interval",
@@ -226,3 +205,18 @@ def shutdown_scheduler() -> None:
         scheduler.shutdown(wait=False)
         scheduler = None
         logger.info("scheduler_stopped")
+
+
+def schedule_fast_cycle(step_seconds: int) -> None:
+    """Поставить одиночный date-джоб прогона цикла (при добавлении бота в группу)."""
+    if scheduler is None:
+        logger.warning("fast_cycle_no_scheduler")
+        return
+    scheduler.add_job(
+        _run_fast_cycle, "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=5),
+        args=[step_seconds],
+        id="fast-cycle",
+        replace_existing=True,
+    )
+    logger.info("fast_cycle_scheduled step_seconds=%s", step_seconds)

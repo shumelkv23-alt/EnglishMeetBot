@@ -20,7 +20,7 @@ leaderboard_ledger): победа +hangman_win_points, поражение -hangm
 """
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -238,6 +238,8 @@ async def start_hangman(db: AsyncSession, space_name: str, profile: Profile) -> 
         "config": cfg,
     }
     session = await party_games._start_session(db, space_name, "hangman", "Hangman", state)
+    if session is None:
+        return {"text": "A game is already running — finish it first."}
     return build_hangman_card(state, session.id)
 
 
@@ -249,6 +251,16 @@ async def _finish(
     win_points = cfg.get("win_points", WIN_POINTS)
     lose_points = cfg.get("lose_points", LOSE_POINTS)
 
+    state["won"] = won
+    # CAS: только один финальный клик начисляет счёт и закрывает сессию.
+    res = await db.execute(
+        update(GameSession)
+        .where(GameSession.id == session.id, GameSession.status == "active")
+        .values(status="finished", state=state)
+    )
+    if res.rowcount == 0:
+        return {"text": "Game already finished"}
+
     score = await _get_or_create_score(db, profile.id)
     if won:
         score.wins += 1
@@ -259,9 +271,6 @@ async def _finish(
         score.points -= lose_points
         delta = -lose_points
 
-    state["won"] = won
-    session.state = state
-    session.status = "finished"
     await db.commit()
     return _result_card(state, session.id, won, delta)
 
@@ -310,7 +319,7 @@ async def _apply_guess(
         if raw in guessed or raw in wrong:
             return {
                 "text": "You already tried that letter 😉",
-                "cardsV2": build_hangman_card(state, game_id),
+                "cardsV2": build_hangman_card(state, session.id),
             }
         if raw in word:
             guessed.add(raw)  # верная буква — попытка НЕ тратится
