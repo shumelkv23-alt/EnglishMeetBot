@@ -919,3 +919,24 @@ class LeveledProgress(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class ChatMessage(Base):
+    """Сообщение диалога с ботом (24. chat_messages) — память для LLM-ответов.
+
+    Хранится по space (DM или группа); последние N сообщений используются как
+    контекст диалога в lesson_assistant (5 сообщений бота + 5 человека).
+    """
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("idx_chat_messages_space_created", "space_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # 'user' | 'assistant'
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

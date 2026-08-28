@@ -94,6 +94,27 @@ def test_build_weekly_poll_card_shows_counts():
     assert [b["text"] for b in buttons] == ["15:00 (4)", "16:00 (2)"]
 
 
+def test_build_weekly_poll_card_no_finish_button_by_default():
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    for section in sections:
+        widgets = section.get("widgets", [])
+        for w in widgets:
+            if "buttonList" in w:
+                for b in w["buttonList"]["buttons"]:
+                    p = {x["key"]: x["value"] for x in b["onClick"]["action"]["parameters"]}
+                    assert p["method"] != "finish_voting"
+
+
+def test_build_weekly_poll_card_finish_button():
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, show_finish_button=True)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    last = sections[-1]["widgets"][0]["buttonList"]["buttons"]
+    assert len(last) == 1
+    p = {x["key"]: x["value"] for x in last[0]["onClick"]["action"]["parameters"]}
+    assert p["method"] == "finish_voting"
+
+
 def test_build_confirmation_card_has_yes_no():
     card = build_confirmation_card(3, "https://x/hook")
     assert "Thursday" in card["cardsV2"][0]["card"]["header"]["title"]

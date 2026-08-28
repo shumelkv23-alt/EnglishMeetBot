@@ -6,7 +6,7 @@ def test_is_level_command_matches_variants():
     assert _is_level_command("/level")
     assert _is_level_command("!level")
     assert _is_level_command("level")
-    assert _is_level_command("уровень")
+    assert _is_level_command("lvl")
 
 
 def test_is_level_command_ignores_other_text():

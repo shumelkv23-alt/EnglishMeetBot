@@ -57,11 +57,13 @@ def _is_valid_submit_time(choice: str) -> bool:
 def build_weekly_poll_card(
     days: list[int], times: list[str], action_url: str,
     counts: dict[tuple[int, str], int] | None = None, today_dow: int | None = None,
+    show_finish_button: bool = False,
 ) -> dict:
     """Карточка недельного опроса: по секции на день, кнопки времени со счётчиками.
 
     counts — {(day_of_week, "HH:MM"): N}; None → все нули.
     today_dow — индекс сегодняшнего дня (по таймзоне приложения); дни раньше — без кнопок.
+    show_finish_button — кнопка «завершить голосование» (только для fast_cycle).
     """
     counts = counts or {}
     if today_dow is None:
@@ -93,6 +95,17 @@ def build_weekly_poll_card(
         sections.append({
             "header": f"{day_name} · {total} voted",
             "widgets": [{"buttonList": {"buttons": buttons}}],
+        })
+    if show_finish_button:
+        finish_buttons = [{
+            "text": "Finish voting ✅",
+            "onClick": {"action": {
+                "function": action_url or "submit_daily_poll",
+                "parameters": [{"key": "method", "value": "finish_voting"}],
+            }},
+        }]
+        sections.append({
+            "widgets": [{"buttonList": {"buttons": finish_buttons}}],
         })
     return {
         "cardsV2": [{
@@ -314,7 +327,10 @@ async def send_weekly_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
     if not space_id:
         return
     days, times, counts = await poll_counts(db, poll.id)
-    card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
+    card = build_weekly_poll_card(
+        days, times, get_settings().chat_app_audience, counts,
+        show_finish_button=await _fast_cycle_on(db),
+    )
     from app.services.chat_sender import patch_message, send_message as send_space_message
 
     # уже есть карточка — обновляем на месте, чтобы не плодить дубликаты
@@ -338,7 +354,10 @@ async def refresh_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
     if not poll.card_message_name:
         return
     days, times, counts = await poll_counts(db, poll.id)
-    card = build_weekly_poll_card(days, times, get_settings().chat_app_audience, counts)
+    card = build_weekly_poll_card(
+        days, times, get_settings().chat_app_audience, counts,
+        show_finish_button=await _fast_cycle_on(db),
+    )
     from app.services.chat_sender import patch_message
 
     try:
@@ -347,12 +366,17 @@ async def refresh_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
         logger.exception("poll_card_refresh_failed poll=%s", poll.id)
 
 
+async def _fast_cycle_on(db: AsyncSession) -> bool:
+    """Флаг демо-режима fast_cycle (config['fast_cycle'])."""
+    return bool((await get_or_create_config(db, "fast_cycle", False)).value)
+
+
 async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> tuple[MeetingInstance, str] | None:
     """Подвести день: если набрана квота и встречи ещё нет — создать и вернуть (встреча, время).
 
     Возвращает None, если квота не набрана или встреча на этот день уже создана.
     """
-    quorum = int((await get_or_create_config(db, "quorum_threshold", 4)).value or 4)
+    quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
     slots = (
         await db.execute(
             select(PollSlot).where(PollSlot.poll_id == poll.id, PollSlot.day_of_week == day_of_week)

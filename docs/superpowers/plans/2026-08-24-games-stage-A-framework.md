@@ -282,7 +282,7 @@ async def award_points(db: AsyncSession, profile_id: int, points: int, reason: s
             reason=reason,
             event_date=datetime.now(timezone.utc),
         )
-    )
+    )\
     await db.commit()
 ```
 

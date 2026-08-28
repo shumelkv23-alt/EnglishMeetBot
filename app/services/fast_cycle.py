@@ -7,25 +7,20 @@
 """
 import asyncio
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-
-from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
-from app.models import Attendance, MeetingInstance
 
 logger = logging.getLogger(__name__)
 
-# Один тестовый аккаунт для авто-голоса: реальные участники (3 чел.) голосуют сами,
-# бот накручивает один голос, чтобы кворум 4 набрался.
-TEST_USER = "users/test_cycle_4"
+# Пауза после нажатия «Finish voting» / кворума: напоминание → 10с → карточка.
+POST_MEETING_DELAY_SECONDS = 10
 
 
 async def run_cycle(step_seconds: int) -> None:
     """Прогнать один цикл: опрос → вопросы → голоса → кворум → напоминание → карточка → чек-ин."""
-    from app.services.onboarding import get_or_create_profile
     from app.services.weekly_poll import (
         DAYS,
         active_weekly_poll,
@@ -33,12 +28,10 @@ async def run_cycle(step_seconds: int) -> None:
         finalize_day,
         get_or_create_config,
         send_weekly_poll_card,
-        submit_poll,
     )
 
     tz = ZoneInfo(get_settings().app_timezone)
     today_dow = datetime.now(tz).weekday()
-    voters = [TEST_USER]
 
     async def pause() -> None:
         if step_seconds > 0:
@@ -59,27 +52,33 @@ async def run_cycle(step_seconds: int) -> None:
         logger.info("fast_cycle step=вопросы sent=%s", sent_q)
     await pause()
 
-    # 3. Голосование (бот накручивает 1 голос за сегодня, слот 15:00)
-    async with AsyncSessionLocal() as db:
-        form = {
-            "day": {"stringInputs": {"value": [str(today_dow)]}},
-            "time": {"stringInputs": {"value": ["15:00"]}},
-        }
-        for uid in voters:
-            profile = await get_or_create_profile(db, workspace_user_id=uid)
-            res = await submit_poll(db, profile, form)
-            if not res.get("ok"):
-                logger.warning("fast_cycle vote_failed user=%s res=%s", uid, res)
-        logger.info("fast_cycle step=голосование day=%s", today_dow)
-    await pause()
-
-    # 4. Кворум — ждём, пока 3 реальных проголосуют (бот уже накрутил 1 голос).
+    # 3. Кворум — ждём, пока участники проголосуют (кворум из config['quorum_threshold']).
+    # Кнопка «Finish voting» ставит config['finish_voting_requested'] — тогда проверка
+    # кворума выполняется СРАЗУ, не дожидаясь следующей итерации цикла. Кворум всё
+    # равно обязателен: без него встреча не создаётся.
     meeting_id = None
     deadline = datetime.now(timezone.utc) + timedelta(minutes=8)
     while meeting_id is None and datetime.now(timezone.utc) < deadline:
         async with AsyncSessionLocal() as db:
             poll = await active_weekly_poll(db)
             result = await finalize_day(db, poll, today_dow) if poll else None
+            requested = poll is not None and bool(
+                (await get_or_create_config(db, "finish_voting_requested", False)).value
+            )
+            if requested:
+                # Флаг обработали — сбрасываем; если кворума не хватило, сообщаем в группу.
+                cfg = await get_or_create_config(db, "finish_voting_requested", False)
+                cfg.value = False
+                await db.commit()
+                if result is None:
+                    from app.services.chat_sender import send_text
+
+                    space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+                    if space_id:
+                        await asyncio.to_thread(
+                            send_text, space_id,
+                            "Quorum not met yet — keep voting! 🗳️",
+                        )
             if result is not None:
                 meeting, time_str = result
                 meeting_id = meeting.id
@@ -96,31 +95,29 @@ async def run_cycle(step_seconds: int) -> None:
                 logger.info("fast_cycle step=кворум встреча_создана id=%s", meeting_id)
             await db.rollback()
         if meeting_id is None:
-            await asyncio.sleep(15)  # ждём голоса участников
+            await asyncio.sleep(5)  # ждём голоса участников / нажатие кнопки
     if meeting_id is None:
         logger.warning("fast_cycle step=кворум таймаут — кворум не набран")
         return
+    await asyncio.sleep(POST_MEETING_DELAY_SECONDS)
+
+    # 4. Напоминание (встреча на сегодня — напомнить в группу)
+    from app.services.invites import _send_reminder
+
+    await _send_reminder(str(meeting_id))
+    logger.info("fast_cycle step=напоминание meeting=%s", meeting_id)
+    await asyncio.sleep(POST_MEETING_DELAY_SECONDS)
+
+    # 5. Карточка занятия (+ vocabulary внутри карточки)
+    from app.cards.service import send_card
+
+    await send_card(str(meeting_id))
+    logger.info("fast_cycle step=карточка meeting=%s", meeting_id)
     await pause()
 
-    # 5. Напоминание (встреча на сегодня — напомнить в группу)
-    if meeting_id:
-        from app.services.invites import _send_reminder
-
-        await _send_reminder(str(meeting_id))
-        logger.info("fast_cycle step=напоминание meeting=%s", meeting_id)
-    await pause()
-
-    # 6. Карточка занятия
-    if meeting_id:
-        from app.cards.service import send_card
-
-        await send_card(str(meeting_id))
-        logger.info("fast_cycle step=карточка meeting=%s", meeting_id)
-    await pause()
-
-    # 7. Чек-ин — карточка в группу + отметки участников
+    # 6. Чек-ин — карточка в группу (участники отмечаются кнопкой сами)
     async with AsyncSessionLocal() as db:
-        from app.services.checkin import build_checkin_card, submit_checkin
+        from app.services.checkin import build_checkin_card
         from app.services.chat_sender import send_message as send_space_message
 
         space_id = (await get_or_create_config(db, "space_id", "")).value or ""
@@ -132,20 +129,6 @@ async def run_cycle(step_seconds: int) -> None:
                 text="The meetup is starting — check in! ✅",
                 cards_v2=card["cardsV2"],
             )
-        checked = 0
-        for uid in voters:
-            profile = await get_or_create_profile(db, workspace_user_id=uid)
-            r = await submit_checkin(db, profile, meeting_id) if meeting_id else {"ok": False}
-            if r.get("ok"):
-                checked += 1
-        n_att = (
-            await db.execute(
-                select(func.count())
-                .select_from(Attendance)
-                .where(Attendance.meeting_instance_id == meeting_id)
-            )
-        ).scalar_one() if meeting_id else 0
-        logger.info("fast_cycle step=чек-ин checked=%s attendance=%s", checked, n_att)
         await db.rollback()
 
     logger.info("fast_cycle done")

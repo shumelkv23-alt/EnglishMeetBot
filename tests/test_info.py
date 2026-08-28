@@ -4,12 +4,9 @@ from app.api.google_chat import _info_card, _is_info_command
 
 
 def test_is_info_command_matches():
-    for t in (
-        "info", "инфо", "help", "помощь", "хелп", "возможности",
-        "команды", "commands", "что ты умеешь",
-    ):
+    for t in ("info", "help", "commands"):
         assert _is_info_command(t), t
-    for t in ("games", "level", "learn", "points", "top", "hi", "привет"):
+    for t in ("games", "level", "learn", "points", "top", "hi"):
         assert not _is_info_command(t), t
 
 
@@ -35,19 +32,19 @@ def _text(card: dict) -> str:
 
 def test_dm_card_lists_dm_features_only():
     text = _text(_info_card(True))
-    for key in ("learn", "level", "Hangman", "Wordle", "points", "анкета"):
+    for key in ("learn", "levels", "Hangman", "Wordle", "points", "form"):
         assert key in text, key
     # не должно быть групповых игр и расписания
-    for key in ("Alias", "Wheel Game", "Guesspionage", "таблица"):
+    for key in ("Alias", "Wheel Game", "Guesspionage", "table"):
         assert key not in text, key
 
 
 def test_group_card_lists_group_features_only():
     text = _text(_info_card(False))
-    for key in ("таблица", "вопросы", "Alias", "Wheel Game", "points"):
+    for key in ("table", "questions", "Alias", "Wheel Game", "points"):
         assert key in text, key
     # не должно быть DM-игр и курсов
-    for key in ("Hangman", "Millionaire", "level", "learn"):
+    for key in ("Hangman", "Millionaire", "levels", "learn"):
         assert key not in text, key
 
 

@@ -311,7 +311,7 @@ def build_card_message(content: dict, scheduled_start: datetime | None = None) -
         name = suggested["activity_id"].replace("_", " ").title()
         sections.append({
             "header": "🎮 Suggested activity",
-            "widgets": [{"decoratedText": {"text": f"{name} — {suggested.get('relevance_reason', '')}", "wrapText": True}}],
+            "widgets": [{"decoratedText": {"text": name, "wrapText": True}}],
         })
 
     stretch = content.get("stretch_challenge")

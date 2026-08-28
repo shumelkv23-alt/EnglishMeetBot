@@ -200,8 +200,17 @@ async def _call_llm(payload: dict, timeout: float) -> str | None:
         return None
 
 
-async def _llm_answer(question: str, context: str) -> str | None:
-    """Ответ LLM на свободный вопрос/просьбу (английский, краткий)."""
+async def _llm_answer(
+    question: str, context: str, history: list[tuple[str, str]] | None = None,
+) -> str | None:
+    """Ответ LLM на свободный вопрос/просьбу (английский, краткий).
+
+    history — последние сообщения диалога [(role, text), ...] для контекста.
+    """
+    history_block = ""
+    if history:
+        lines = "\n".join(f"{role}: {text}" for role, text in history)
+        history_block = f"Recent conversation:\n{lines}\n\n"
     payload = {
         "model": get_settings().llm_games_model,
         "max_tokens": 800,
@@ -212,7 +221,7 @@ async def _llm_answer(question: str, context: str) -> str | None:
             "single brief message in Russian containing just the translation — nothing else. "
             "Keep answers short (1-3 sentences)."
         ),
-        "messages": [{"role": "user", "content": f"Context:\n{context}\n\nUser message: {question}"}],
+        "messages": [{"role": "user", "content": f"Context:\n{context}\n\n{history_block}User message: {question}"}],
     }
     return await _call_llm(payload, timeout=60.0)
 
@@ -353,8 +362,14 @@ async def handle_lesson_query(db: AsyncSession, text: str, space_id: str) -> dic
         if suggestions:
             return build_suggestions_card(suggestions)
 
-    answer = await _llm_answer(text.strip(), _card_context(card))
+    from app.services.chat_history import add_message, get_history
+
+    history = await get_history(db, space_id)
+    answer = await _llm_answer(text.strip(), _card_context(card), history=history)
     if answer:
+        await add_message(db, space_id, "user", text.strip())
+        await add_message(db, space_id, "assistant", answer)
+        await db.commit()
         return {"text": answer}
 
     return None

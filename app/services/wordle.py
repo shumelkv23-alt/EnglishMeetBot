@@ -1,8 +1,8 @@
 """Игра Wordle — соло в личке против бота.
 
-Бот загадывает английское слово из 5 букв (wordle_bank.WORDLE_WORDS), игрок
-угадывает слово целиком (поле «Your word»). После каждой попытки буквы
-подсвечиваются:
+Бот загадывает английское слово из 5 букв: сначала пробует LLM (свежие слова),
+при сбое — банк wordle_bank.WORDLE_WORDS. Игрок угадывает слово целиком
+(поле «Your word»). После каждой попытки буквы подсвечиваются:
 - 🟩 буква на месте;
 - 🟨 буква есть в слове, но на другом месте;
 - ⬛ буквы в слове нет.
@@ -123,6 +123,56 @@ def _win_points(guesses_used: int, max_guesses: int) -> int:
     return max_guesses - guesses_used + 1
 
 
+def _sanitize_llm_word(content: str | None, word_length: int) -> str | None:
+    """Вытащить слово из ответа LLM и проверить формат; None при любом отклонении."""
+    if not content:
+        return None
+    word = content.strip().lower().strip('"\'`.,!?:;')
+    word = word.split()[0] if word else ""
+    if len(word) != word_length:
+        return None
+    if not (word.isascii() and word.isalpha()):
+        return None
+    return word
+
+
+async def _pick_wordle_word(word_length: int) -> str | None:
+    """Слово для партии: сначала LLM, при сбое/таймауте — банк (5-буквенные).
+
+    Таймаут короткий: вызов идёт в синхронном вебхуке (Google ждёт ~15с),
+    зависший LLM не должен «убивать» кнопку старта игры.
+    """
+    from app.cards.generator.llm import _call_llm
+
+    settings = get_settings()
+    if settings.llm_api_key and settings.llm_games_model:
+        payload = {
+            "model": settings.llm_games_model,
+            "max_tokens": 20,
+            "system": (
+                "You pick words for a Wordle-style guessing game. "
+                "Return ONLY one real, common English word of the requested length: "
+                "lowercase letters only, no quotes, no explanation, no punctuation."
+            ),
+            "messages": [
+                {"role": "user", "content": f"Pick a common {word_length}-letter English word."}
+            ],
+        }
+        try:
+            content = await _call_llm(payload, timeout=10.0)
+        except Exception:
+            logger.warning("wordle_llm_call_failed", exc_info=True)
+            content = None
+        word = _sanitize_llm_word(content, word_length)
+        if word:
+            return word
+
+    # Фолбэк: банк загадывает только 5-буквенные слова.
+    if word_length == WORD_LENGTH:
+        return random_wordle_word()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Карточки
 # ---------------------------------------------------------------------------
@@ -227,11 +277,10 @@ async def start_wordle(db: AsyncSession, space_name: str, profile: Profile) -> d
     if await party_games.get_active_game(db, space_name) is not None:
         return {"text": "A game is already running — finish it or press «🆕 New game»."}
 
-    word = random_wordle_word()
+    cfg = await _load_wordle_config(db)
+    word = await _pick_wordle_word(cfg["word_length"])
     if not word:
         return {"text": "No words available 🤷"}
-
-    cfg = await _load_wordle_config(db)
     state = {
         "game": "wordle",
         "word": word,

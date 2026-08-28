@@ -175,7 +175,7 @@ def _is_leaderboard_command(raw_text: str) -> bool:
     """Пользователь просит показать рейтинги по играм (команда «top»)."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "топ", "лидерборд", "рейтинг", "top", "leaderboard",
+        "top", "leaderboard",
     ))
 
 
@@ -183,7 +183,7 @@ def _is_points_command(raw_text: str) -> bool:
     """Пользователь просит показать общий лидерборд баллов (не по играм)."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "баллы", "очки", "балы", "points",
+        "points",
     ))
 
 
@@ -191,7 +191,7 @@ def _is_alias_command(raw_text: str) -> bool:
     """Пользователь хочет запустить игру Alias."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "алиас", "alias", "элиас",
+        "alias",
     ))
 
 
@@ -199,7 +199,7 @@ def _is_snake_command(raw_text: str) -> bool:
     """Пользователь хочет запустить игру Snake Oil / «Змеиное масло»."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "снейк", "snake", "змейка", "змеиное", "snakeoil",
+        "snake", "snakeoil",
     ))
 
 
@@ -207,7 +207,7 @@ def _is_games_command(raw_text: str) -> bool:
     """Пользователь просит меню выбора игры."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "игры", "играть", "игра", "games", "game",
+        "games", "game",
     ))
 
 
@@ -222,17 +222,17 @@ def _is_level_command(raw_text: str) -> bool:
         if text.startswith(prefix):
             text = text[1:].strip()
             break
-    return any(text == t or text.startswith(t + " ") for t in ("level", "уровень", "lvl"))
+    return any(text == t or text.startswith(t + " ") for t in ("level", "lvl"))
 
 
 def _game_command(raw_text: str) -> str | None:
     """Команда запуска игры из текста сообщения («кто я» / Quiplash / «Поле чудес»)."""
     lowered = raw_text.lower().strip()
-    if any(k in lowered for k in ("кто я", "who am i", "угадай кто")):
+    if "who am i" in lowered:
         return "who_am_i"
-    if any(k in lowered for k in ("quiplash", "квиплаш", "квиплэш")):
+    if "quiplash" in lowered:
         return "quiplash"
-    if any(k in lowered for k in ("поле чудес", "field of miracles", "wheel of fortune", "колесо фортуны")):
+    if "wheel of fortune" in lowered or "field of miracles" in lowered:
         return "wheel"
     return None
 
@@ -241,7 +241,7 @@ def _is_learn_command(raw_text: str) -> bool:
     """Команда «обучение» в личке — курс «Survival English for Calls» (EN + RU)."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "learn", "course", "обучение", "учёба", "учеба", "учиться", "курс",
+        "learn", "course",
     ))
 
 
@@ -252,7 +252,7 @@ def _is_leveled_command(raw_text: str) -> bool:
     """
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "levels", "уровни", "english by level",
+        "levels", "english by level",
     ))
 
 
@@ -260,59 +260,58 @@ def _is_info_command(raw_text: str) -> bool:
     """Команда «info» — карточка о боте и его возможностях (в личке и в группе)."""
     lowered = raw_text.lower().strip(" .!?")
     return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "info", "инфо", "help", "помощь", "хелп", "возможности",
-        "команды", "commands", "что ты умеешь", "что умеешь",
+        "info", "help", "commands",
     ))
 
 
 def _info_card(is_dm: bool) -> dict:
     """Карточка «info»: назначение бота и его возможности (в личке или в группе)."""
     purpose = (
-        "**EnglishMeetBot** — помощник разговорного английского клуба 🤝\n\n"
-        "Помогаю собирать людей на встречи и проводить их: веду расписание, "
-        "отмечаю участников, запускаю игры и короткие уроки английского — прямо в чате."
+        "**EnglishMeetBot** — your English conversation club assistant 🤝\n\n"
+        "I help bring people together for meetups and run them: manage the schedule, "
+        "track attendance, launch games and short English lessons — right in the chat."
     )
 
     if is_dm:
         sections = [
-            {"header": "Зачем я нужен", "widgets": [{"textParagraph": {"text": purpose}}]},
-            {"header": "Обучение 📚", "widgets": [{"textParagraph": {"text": (
-                "`learn` — курс «Survival English for Calls»: фразы для звонков и созвонов\n"
-                "`levels` — английский по уровням A/B/C: темы, лексика, грамматика и тесты"
+            {"header": "What I do", "widgets": [{"textParagraph": {"text": purpose}}]},
+            {"header": "Learning 📚", "widgets": [{"textParagraph": {"text": (
+                "`learn` — the «Survival English for Calls» course: phrases for calls and meetings\n"
+                "`levels` — English by level A/B/C: topics, vocabulary, grammar and quizzes"
             )}}]},
-            {"header": "Игры в личке 🎮", "widgets": [{"textParagraph": {"text": (
-                "`games` — соло-игры против бота:\n"
+            {"header": "Solo games 🎮", "widgets": [{"textParagraph": {"text": (
+                "`games` — solo games vs the bot:\n"
                 "💀 Hangman · 💎 Millionaire · 🟩 Wordle · 🤥 Two truths & a lie\n"
                 "🧩 Word puzzle · 🔤 Translate it · 🔠 Words of Wonders · 🤔 Riddles"
             )}}]},
-            {"header": "Прогресс и рейтинги 📈", "widgets": [{"textParagraph": {"text": (
-                "`points` — твои баллы и общий лидерборд\n"
-                "`top` — рейтинги по играм\n"
-                "`анкета` — заполнить анкету уровня и интересов"
+            {"header": "Progress & leaderboards 📈", "widgets": [{"textParagraph": {"text": (
+                "`points` — your points and the overall leaderboard\n"
+                "`top` — per-game leaderboards\n"
+                "`form` — fill in your level and interests"
             )}}]},
         ]
-        subtitle = "что я умею в личке (DM)"
+        subtitle = "what I can do in a DM"
     else:
         sections = [
-            {"header": "Зачем я нужен", "widgets": [{"textParagraph": {"text": purpose}}]},
-            {"header": "Сбор людей и расписание 📅", "widgets": [{"textParagraph": {"text": (
-                "`таблица` — недельное расписание встреч (дни × время)\n"
-                "`вопросы` — вопросы недели\n"
-                "Перед встречей присылаю опрос «приду / не приду» и напоминания."
+            {"header": "What I do", "widgets": [{"textParagraph": {"text": purpose}}]},
+            {"header": "Meetups & schedule 📅", "widgets": [{"textParagraph": {"text": (
+                "`table` — weekly meetup schedule (days × times)\n"
+                "`questions` — questions of the week\n"
+                "Before a meetup I send an RSVP poll and reminders."
             )}}]},
-            {"header": "Игры для уроков 🎲", "widgets": [{"textParagraph": {"text": (
-                "`games` — командные игры:\n"
-                "🎲 Alias · 🧪 Snake Oil · 🎮 Quiplash · 🎭 Кто я\n"
+            {"header": "Games for lessons 🎲", "widgets": [{"textParagraph": {"text": (
+                "`games` — group games:\n"
+                "🎲 Alias · 🧪 Snake Oil · 🎮 Quiplash · 🎭 Who am I\n"
                 "🕵️ Spy · 📊 Guesspionage · 🎡 Wheel Game\n"
-                "`alias` / `snake` — быстрый старт"
+                "`alias` / `snake` — quick start"
             )}}]},
-            {"header": "Рейтинги и баллы 📈", "widgets": [{"textParagraph": {"text": (
-                "`points` — общий лидерборд баллов\n"
-                "`top` — рейтинги по играм\n"
-                "`анкета` — заполнить анкету (в личке)"
+            {"header": "Leaderboards & points 📈", "widgets": [{"textParagraph": {"text": (
+                "`points` — overall leaderboard of points\n"
+                "`top` — per-game leaderboards\n"
+                "`form` — fill in the form (in a DM)"
             )}}]},
         ]
-        subtitle = "что я умею в группе"
+        subtitle = "what I can do in a group"
 
     return {"cardsV2": [{
         "cardId": "info",
@@ -1148,6 +1147,7 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
                 )
                 from app.services.weekly_poll import (
                     active_weekly_poll, build_weekly_poll_card, poll_counts, submit_poll,
+                    _fast_cycle_on,
                 )
                 result = await submit_poll(db, profile, form_inputs)
                 if result.get("ok") and message_name:
@@ -1157,6 +1157,7 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
                             days, times, counts = await poll_counts(db, poll.id)
                             updated_card = build_weekly_poll_card(
                                 days, times, settings.chat_app_audience, counts,
+                                show_finish_button=await _fast_cycle_on(db),
                             )
                     except Exception:
                         # голос уже записан — карточку просто не обновим
@@ -1171,6 +1172,26 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
     if result.get("reason") == "closed":
         return _addon_response({"text": "Voting is closed — results announced."})
     return _addon_response({"text": "Couldn't save — try again."})
+
+
+async def _handle_finish_voting() -> JSONResponse:
+    """Кнопка «Finish voting» (только fast_cycle): ставит флаг, цикл fast_cycle завершает день.
+
+    Саму встречу/рассылки делает run_cycle — иначе задвоим инвайт и напоминания.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            from app.services.weekly_poll import _fast_cycle_on, get_or_create_config
+
+            if not await _fast_cycle_on(db):
+                return _addon_response({"text": "This button is only available in demo mode."})
+            cfg = await get_or_create_config(db, "finish_voting_requested", False)
+            cfg.value = True
+            await db.commit()
+    except Exception:
+        logger.exception("finish_voting_failed")
+        return _addon_response({"text": "Couldn't finish voting — try again."})
+    return _addon_response({"text": "Finishing voting — meetup details are on the way! 🗓️"})
 
 
 async def _handle_confirm_attendance(user: dict, params: dict) -> JSONResponse:
@@ -1807,7 +1828,7 @@ async def _leaderboard_text() -> str:
 def _is_onboarding_command(raw_text: str) -> bool:
     """Пользователь явно просит показать анкету онбординга."""
     lowered = raw_text.lower().strip()
-    return any(trigger in lowered for trigger in ("анкета", "start", "онбординг", "опрос", "anketa"))
+    return any(trigger in lowered for trigger in ("form", "start", "onboarding"))
 
 
 def _onboarding_response_payload(user_name: str, space: dict) -> dict:
@@ -2191,7 +2212,7 @@ async def _handle_member_added(space_name: str, member_name: str) -> None:
 
 def _reply_text(user_name: str, raw_text: str) -> str:
     """Текст ответа на MESSAGE: приветствие или echo."""
-    if any(g in raw_text.lower() for g in ("hi", "hello", "привет")):
+    if any(g in raw_text.lower() for g in ("hi", "hello")):
         return (
             f"Hi {user_name}! 👋\n\n"
             "I'm still learning, but soon we'll start "
@@ -2300,6 +2321,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if method == "submit_daily_poll":
                 message_name = (chat_data.get("buttonClickedPayload", {}).get("message") or {}).get("name")
                 return await _submit_daily_poll(chat_data, common, message_name=message_name)
+            if method == "finish_voting":
+                return await _handle_finish_voting()
             if method == "checkin_present":
                 return await _handle_checkin_present(chat_data, common)
             if method == "confirm_attendance":
@@ -2707,6 +2730,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 message_name=message_name,
             )
             return response_msg
+        if function_name == "finish_voting" or method == "finish_voting":
+            return await _handle_finish_voting()
         if function_name == "checkin_submit" or method == "checkin_present":
             user = event.get("user", {})
             space_name = event.get("space", {}).get("name", "")
