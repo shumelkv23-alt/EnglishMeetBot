@@ -18,12 +18,8 @@ from app.models import Attendance, MeetingInstance
 
 logger = logging.getLogger(__name__)
 
-# Три реальных акка + один тестовый (кворум = 4).
-REAL_USERS = [
-    "users/111473858428808568928",
-    "users/114377988499229847823",
-    "users/106097977256159874444",
-]
+# Один тестовый аккаунт для авто-голоса: реальные участники (3 чел.) голосуют сами,
+# бот накручивает один голос, чтобы кворум 4 набрался.
 TEST_USER = "users/test_cycle_4"
 
 
@@ -42,7 +38,7 @@ async def run_cycle(step_seconds: int) -> None:
 
     tz = ZoneInfo(get_settings().app_timezone)
     today_dow = datetime.now(tz).weekday()
-    voters = REAL_USERS + [TEST_USER]
+    voters = [TEST_USER]
 
     async def pause() -> None:
         if step_seconds > 0:
@@ -63,7 +59,7 @@ async def run_cycle(step_seconds: int) -> None:
         logger.info("fast_cycle step=вопросы sent=%s", sent_q)
     await pause()
 
-    # 3. Голосование (4 голоса за сегодня, слот 15:00)
+    # 3. Голосование (бот накручивает 1 голос за сегодня, слот 15:00)
     async with AsyncSessionLocal() as db:
         form = {
             "day": {"stringInputs": {"value": [str(today_dow)]}},
@@ -77,43 +73,33 @@ async def run_cycle(step_seconds: int) -> None:
         logger.info("fast_cycle step=голосование day=%s", today_dow)
     await pause()
 
-    # 4. Кворум + приглашение
+    # 4. Кворум — ждём, пока 3 реальных проголосуют (бот уже накрутил 1 голос).
     meeting_id = None
-    async with AsyncSessionLocal() as db:
-        poll = await active_weekly_poll(db)
-        result = await finalize_day(db, poll, today_dow) if poll else None
-        if result is not None:
-            meeting, time_str = result
-            meeting_id = meeting.id
-            # Пост приглашения в группу БЕЗ scheduler-джобов — иначе те навесят
-            # напоминание/чек-ин/карточку позже по реальному времени, и всё смешается.
-            from app.services.chat_sender import send_text
-            from app.services.invites import build_invite_text
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=8)
+    while meeting_id is None and datetime.now(timezone.utc) < deadline:
+        async with AsyncSessionLocal() as db:
+            poll = await active_weekly_poll(db)
+            result = await finalize_day(db, poll, today_dow) if poll else None
+            if result is not None:
+                meeting, time_str = result
+                meeting_id = meeting.id
+                # Пост приглашения в группу БЕЗ scheduler-джобов — иначе те навесят
+                # напоминание/чек-ин/карточку позже по реальному времени, и всё смешается.
+                from app.services.chat_sender import send_text
+                from app.services.invites import build_invite_text
 
-            space_id = (await get_or_create_config(db, "space_id", "")).value or ""
-            if space_id:
-                await asyncio.to_thread(
-                    send_text, space_id, f"🗓️ {build_invite_text(DAYS[today_dow], time_str, None)}"
-                )
-            logger.info("fast_cycle step=кворум встреча_создана id=%s", meeting_id)
-        elif poll is not None:
-            day = poll.poll_date + timedelta(days=today_dow)
-            day_start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-            existing = (
-                await db.execute(
-                    select(MeetingInstance).where(
-                        MeetingInstance.poll_id == poll.id,
-                        MeetingInstance.scheduled_start >= day_start,
-                        MeetingInstance.scheduled_start < day_start + timedelta(days=1),
+                space_id = (await get_or_create_config(db, "space_id", "")).value or ""
+                if space_id:
+                    await asyncio.to_thread(
+                        send_text, space_id, f"🗓️ {build_invite_text(DAYS[today_dow], time_str, None)}"
                     )
-                )
-            ).scalars().first()
-            if existing is not None:
-                meeting_id = existing.id
-                logger.info("fast_cycle step=кворум встреча_уже_есть id=%s", meeting_id)
-            else:
-                logger.warning("fast_cycle step=кворум квота_не_набрана")
-        await db.rollback()
+                logger.info("fast_cycle step=кворум встреча_создана id=%s", meeting_id)
+            await db.rollback()
+        if meeting_id is None:
+            await asyncio.sleep(15)  # ждём голоса участников
+    if meeting_id is None:
+        logger.warning("fast_cycle step=кворум таймаут — кворум не набран")
+        return
     await pause()
 
     # 5. Напоминание (встреча на сегодня — напомнить в группу)

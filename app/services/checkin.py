@@ -82,6 +82,11 @@ async def submit_checkin(db: AsyncSession, profile: Profile, instance_id: int, a
     open_at, close_at = checkin_window(meeting.scheduled_start, meeting.scheduled_end, after_min)
     now = datetime.now(timezone.utc)
     within = is_within_window(now, open_at, close_at)
+    # В режиме fast_cycle чек-ин засчитываем всегда (встреча на демо-время).
+    from app.services.weekly_poll import get_or_create_config
+
+    if bool((await get_or_create_config(db, "fast_cycle", False)).value):
+        within = True
 
     attendance = (
         await db.execute(
