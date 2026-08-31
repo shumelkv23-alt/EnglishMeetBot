@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     # LLM (Anthropic Messages API — Azati)
     llm_api_key: str = ""  # x-api-key Azati; пусто = генерация отключена (банк)
     llm_base_url: str = "https://llm.azati.ai"  # база Anthropic Messages API
-    llm_games_model: str = "Azati Fast"  # модель для генерации вопросов/карточек/игр
+    llm_games_model: str = "Azati Fast"  # быстрая модель для вопросов и игр
+    # Карточке полезна более сильная модель, но пустое значение сохраняет прежнее
+    # поведение и использует llm_games_model.
+    llm_cards_model: str = ""
 
     @property
     def database_url(self) -> str:

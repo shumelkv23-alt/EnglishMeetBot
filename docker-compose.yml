@@ -31,6 +31,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://llm.azati.ai}
+      LLM_GAMES_MODEL: ${LLM_GAMES_MODEL:-Azati Fast}
+      LLM_CARDS_MODEL: ${LLM_CARDS_MODEL:-}
     depends_on:
       db:
         condition: service_healthy

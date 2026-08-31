@@ -1,32 +1,243 @@
-"""Pydantic-схемы карточки занятия (ТЗ §4.2).
+"""Pydantic contracts for persisted cards and strict LLM card drafts.
 
-Используются для валидации LLM-ответа (Phase 2) и как контракт структуры
-`cards.content` (JSONB). `type_specific_payload` вариативен по card_type.
+``CardContent`` remains the tolerant contract for historical ``cards.content``
+JSON. ``LLMCardDraft`` is deliberately stricter: it describes only content
+owned by the generator, before server-owned fields such as ``card_type``,
+``difficulty_level``, ``suggested_activity`` and ``meta`` are attached.
 """
-from typing import Any
+from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+from typing import Annotated, Any, Literal, Self
 
-
-class SubQuestion(BaseModel):
-    text: str
-    level: str = "medium"  # easy | medium | hard
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 
-class VocabItem(BaseModel):
-    phrase: str
-    translation: str = ""
-    example: str = ""
+MAX_TOPIC_LEN = 200
+MAX_QUESTION_LEN = 500
+MAX_PHASE_TEXT_LEN = 500
+MAX_VOCAB_PHRASE_LEN = 100
+MAX_TRANSLATION_LEN = 250
+MAX_EXAMPLE_LEN = 500
+MAX_PAYLOAD_TEXT_LEN = 1000
+MAX_PAYLOAD_ITEMS = 12
+MAX_PAYLOAD_TOTAL_CHARS = 4000
+MAX_DRAFT_TOTAL_CHARS = 8000
+
+QuestionLevel = Literal["easy", "medium", "hard"]
+
+TopicText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TOPIC_LEN),
+]
+QuestionText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_LEN),
+]
+PhaseText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_PHASE_TEXT_LEN),
+]
+PayloadText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_PAYLOAD_TEXT_LEN),
+]
+PayloadLabel = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
+
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def normalise_card_text(value: str) -> str:
+    """Canonical form used for inexpensive duplicate checks."""
+    return " ".join(re.sub(r"[^\w]+", " ", value.casefold()).split())
+
+
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class SubQuestion(_StrictModel):
+    text: QuestionText
+    level: QuestionLevel
+
+
+class VocabItem(_StrictModel):
+    phrase: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_VOCAB_PHRASE_LEN),
+    ]
+    translation: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TRANSLATION_LEN),
+    ]
+    example: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_EXAMPLE_LEN),
+    ]
+
+    @field_validator("phrase")
+    @classmethod
+    def phrase_is_english(cls, value: str) -> str:
+        if not _LATIN_RE.search(value) or _CYRILLIC_RE.search(value):
+            raise ValueError("phrase must be in English")
+        return value
+
+    @field_validator("translation")
+    @classmethod
+    def translation_is_russian(cls, value: str) -> str:
+        if not _CYRILLIC_RE.search(value):
+            raise ValueError("translation must contain Russian text")
+        return value
+
+    @field_validator("example")
+    @classmethod
+    def example_is_english(cls, value: str) -> str:
+        if not _LATIN_RE.search(value) or _CYRILLIC_RE.search(value):
+            raise ValueError("example must be in English")
+        return value
 
 
 class SuggestedActivity(BaseModel):
+    """Server-owned activity data kept tolerant for historical card JSON."""
+
     activity_id: str
-    activity_type: str = "group_game"  # group_game | solo_activity
+    activity_type: str = "group_game"
     relevance_reason: str = ""
 
 
+class WarmUp(_StrictModel):
+    question: PhaseText
+    based_on_profile_field: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ] | None = None
+
+
+class MainContent(_StrictModel):
+    topic: TopicText
+    sub_questions: list[SubQuestion] = Field(min_length=3, max_length=3)
+    type_specific_payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def questions_are_progressive_and_unique(self) -> Self:
+        levels = [question.level for question in self.sub_questions]
+        if levels != ["easy", "medium", "hard"]:
+            raise ValueError("sub_questions must be ordered easy, medium, hard")
+        normalised = [normalise_card_text(question.text) for question in self.sub_questions]
+        if len(set(normalised)) != len(normalised):
+            raise ValueError("sub_questions must be unique")
+        return self
+
+
+class LLMCardDraft(_StrictModel):
+    """All four phases generated by the LLM, without server-owned metadata."""
+
+    warm_up: WarmUp
+    main_content: MainContent
+    vocab_box: list[VocabItem] = Field(min_length=2, max_length=3)
+    stretch_challenge: PhaseText
+    wrap_up_question: PhaseText
+
+    @model_validator(mode="after")
+    def vocab_phrases_are_unique(self) -> Self:
+        phrases = [normalise_card_text(item.phrase) for item in self.vocab_box]
+        if len(set(phrases)) != len(phrases):
+            raise ValueError("vocab_box phrases must be unique")
+        return self
+
+
+class _ExtensiblePayload(BaseModel):
+    """Validate renderer-owned fields while preserving future recipe fields."""
+
+    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
+
+
+class WouldYouRatherPayload(_ExtensiblePayload):
+    option_a: PayloadText
+    option_b: PayloadText
+
+    @model_validator(mode="after")
+    def options_are_distinct(self) -> Self:
+        if normalise_card_text(self.option_a) == normalise_card_text(self.option_b):
+            raise ValueError("option_a and option_b must be different")
+        return self
+
+
+class RoleplayPayload(_ExtensiblePayload):
+    scenario: PayloadText
+    roles: list[PayloadLabel] = Field(min_length=2, max_length=6)
+
+    @model_validator(mode="after")
+    def roles_are_unique(self) -> Self:
+        roles = [normalise_card_text(role) for role in self.roles]
+        if len(set(roles)) != len(roles):
+            raise ValueError("roles must be unique")
+        return self
+
+
+class StorytellingPayload(_ExtensiblePayload):
+    starter_sentence: PayloadText
+
+
+class CulturePayload(_ExtensiblePayload):
+    idiom: PayloadText
+    meaning: PayloadText
+    example: PayloadText
+
+
+class DebatePayload(_ExtensiblePayload):
+    statement: PayloadText
+    sides: list[PayloadLabel] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def sides_are_distinct(self) -> Self:
+        sides = [normalise_card_text(side) for side in self.sides]
+        if len(set(sides)) != len(sides):
+            raise ValueError("debate sides must be different")
+        return self
+
+
+class NewsReactionPayload(_ExtensiblePayload):
+    headline: PayloadText
+    summary: PayloadText
+
+
+class GameDayPayload(_ExtensiblePayload):
+    activity_id: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=50,
+            pattern=r"^[a-z][a-z0-9_]*$",
+        ),
+    ]
+
+
+class TimeCapsulePayload(_ExtensiblePayload):
+    prompt: PayloadText
+
+
+# These fields are exactly what the current renderer consumes. Types omitted
+# from the mapping intentionally accept an empty or forward-compatible payload.
+TYPE_SPECIFIC_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
+    "would_you_rather": WouldYouRatherPayload,
+    "roleplay": RoleplayPayload,
+    "storytelling": StorytellingPayload,
+    "culture": CulturePayload,
+    "debate": DebatePayload,
+    "news_reaction": NewsReactionPayload,
+    "game_day": GameDayPayload,
+    "time_capsule": TimeCapsulePayload,
+}
+
+
 class CardContent(BaseModel):
-    """Полная структура карточки. Доп. поля типов — в type_specific_payload."""
+    """Tolerant persisted-card schema retained for backwards compatibility."""
 
     card_type: str
     difficulty_level: str
@@ -34,6 +245,8 @@ class CardContent(BaseModel):
     main_content: dict[str, Any] = Field(default_factory=dict)
     vocab_box: list[VocabItem] = Field(default_factory=list)
     suggested_activity: SuggestedActivity | None = None
-    stretch_challenge: dict[str, Any] | None = None
+    # Historical rows and the current renderer use a string; the old annotation
+    # incorrectly allowed only a dict.
+    stretch_challenge: str | dict[str, Any] | None = None
     wrap_up_question: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)

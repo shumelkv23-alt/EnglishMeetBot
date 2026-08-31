@@ -4,6 +4,7 @@
 → подбор активности → валидация → сохранение → рендер → отправка в группу.
 """
 import asyncio
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ from app.cards.catalog import BANK_ONLY_TYPES
 from app.cards.generator.llm import generate_llm_content
 from app.cards.generator.template import build_template_content, pick_bank_payload
 from app.cards.models import Card, CardType
+from app.cards.quality import check_generated_card_quality
 from app.cards.rotation import select_card_type
 from app.cards.validator import validate_card
 from app.config import get_settings
@@ -29,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 _EXCLUDED_QUESTIONS = frozenset([ONBOARDING_QUESTION, *ONBOARDING_QUESTIONS.values()])
 _RECENT_DAYS = 7
+_MAX_CONTEXT_ANSWERS = 12
+_MAX_CONTEXT_TEXT = 280
 DEFAULT_LEAD_MINUTES = 60
 
 CEFR_ORDER = {"A1": 0, "A2": 1, "B1": 2, "B2": 3, "C1": 4, "C2": 5}
@@ -99,18 +103,51 @@ async def _recent_answers(db: AsyncSession, profile_ids: list[int]) -> list[Answ
     return list(rows)
 
 
+def _clean_context_text(value: str | None, limit: int = _MAX_CONTEXT_TEXT) -> str:
+    text = " ".join(str(value or "").split())
+    text = html.escape(text, quote=False)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
 def _build_context(profiles: list[Profile], answers: list[Answer]) -> str:
-    """Строковый контекст участников для LLM: «Имя (уровень): ответ» (анонимно)."""
-    profiles_by_id = {p.id: p for p in profiles}
+    """Анонимный и ограниченный контекст участников для LLM."""
+    aliases = {p.id: f"Participant {i}" for i, p in enumerate(profiles, 1)}
     lines: list[str] = []
-    for idx, a in enumerate(answers, 1):
-        p = profiles_by_id.get(a.profile_id)
-        if p is None:
+
+    profile_lines: list[str] = []
+    for p in profiles:
+        parts: list[str] = []
+        if p.english_level:
+            parts.append(f"level {p.english_level}")
+        interests = [_clean_context_text(item, 60) for item in (p.interests or []) if str(item or "").strip()]
+        if interests:
+            parts.append("interests: " + ", ".join(interests[:5]))
+        if parts:
+            profile_lines.append(f"{aliases.get(p.id, 'Participant')}: " + "; ".join(parts))
+    if profile_lines:
+        lines.append("Group profile:")
+        lines.extend(profile_lines[:8])
+
+    answer_lines: list[str] = []
+    for a in answers[:_MAX_CONTEXT_ANSWERS]:
+        alias = aliases.get(a.profile_id)
+        if not alias:
             continue
-        name = f"participant {idx}" if p.anonymize_answers else (p.user_name or f"participant {idx}")
-        level = f" ({p.english_level})" if p.english_level else ""
-        lines.append(f"{name}{level}: {(a.answer_text or '').strip()}")
+        question = _clean_context_text(a.question_text)
+        answer = _clean_context_text(a.answer_text)
+        if answer:
+            answer_lines.append(f"{alias} answered: Q: {question} A: {answer}")
+    if answer_lines:
+        lines.append("Recent public answers:")
+        lines.extend(answer_lines)
+
     return "\n".join(lines) or "no participant answers"
+
+
+def _source_answer_texts(answers: list[Answer]) -> list[str]:
+    return [str(a.answer_text or "").strip() for a in answers if str(a.answer_text or "").strip()]
 
 
 async def _active_card_types(db: AsyncSession) -> list[CardType]:
@@ -133,6 +170,24 @@ async def _history(db: AsyncSession, space_id: str) -> list[tuple[str, datetime]
     return [(name, ts) for name, ts in rows]
 
 
+async def _recent_topics(db: AsyncSession, space_id: str, limit: int = 20) -> list[str]:
+    """Темы последних карточек space — LLM просят их не повторять."""
+    rows = (
+        await db.execute(
+            select(Card.content)
+            .where(Card.space_id == space_id)
+            .order_by(Card.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    topics = []
+    for content in rows:
+        topic = str(((content or {}).get("main_content") or {}).get("topic") or "").strip()
+        if topic:
+            topics.append(topic)
+    return topics
+
+
 def _group_difficulty(profiles: list[Profile], card_type: CardType) -> str:
     """Уровень группы = минимальный CEFR участников, клампится в диапазон типа."""
     levels = [p.english_level for p in profiles if p.english_level in CEFR_ORDER]
@@ -146,19 +201,66 @@ def _group_difficulty(profiles: list[Profile], card_type: CardType) -> str:
     return level
 
 
-def _assemble_card(card_type: CardType, difficulty: str, content: dict, generated_by: str) -> dict:
+def _lowest_group_level(profiles: list[Profile]) -> str | None:
+    levels = [p.english_level for p in profiles if p.english_level in CEFR_ORDER]
+    return min(levels, key=CEFR_ORDER.get) if levels else None
+
+
+def _eligible_card_types(card_types: list[CardType], profiles: list[Profile]) -> list[CardType]:
+    group_size = len(profiles) or 2
+    level = _lowest_group_level(profiles)
+    eligible: list[CardType] = []
+    for card_type in card_types:
+        min_size = int(getattr(card_type, "min_group_size", 2) or 2)
+        max_size = getattr(card_type, "max_group_size", None)
+        if group_size < min_size:
+            continue
+        if max_size is not None and group_size > int(max_size):
+            continue
+        if level:
+            low = CEFR_ORDER.get(getattr(card_type, "cefr_min", "A2"), 0)
+            high = CEFR_ORDER.get(getattr(card_type, "cefr_max", "C1"), 5)
+            if not (low <= CEFR_ORDER[level] <= high):
+                continue
+        eligible.append(card_type)
+    return eligible or card_types
+
+
+def _activity_from_id(activity_id: str | None, reason: str) -> dict | None:
+    game = game_by_id(activity_id or "")
+    if not game:
+        return None
+    return {
+        "activity_id": game["activity_id"],
+        "activity_type": game["activity_type"],
+        "relevance_reason": reason,
+    }
+
+
+def _assemble_card(
+    card_type: CardType,
+    difficulty: str,
+    content: dict,
+    generated_by: str,
+    generation_meta: dict | None = None,
+) -> dict:
     """Собрать полный card_content из контента + suggested_activity."""
     topic = content["main_content"].get("topic", "")
+    suggested = None
     if card_type.name == "game_day":
         aid = (content["main_content"].get("type_specific_payload") or {}).get("activity_id")
-        game = game_by_id(aid)
-        suggested = (
-            {"activity_id": game["activity_id"], "activity_type": game["activity_type"],
-             "relevance_reason": "the game is the center of this card"}
-            if game else match_activity(topic)
-        )
-    else:
+        suggested = _activity_from_id(aid, "the game is the center of this card")
+    if suggested is None:
+        suggested = _activity_from_id(content.get("suggested_activity_id"), "suggested by the card LLM")
+    if suggested is None:
         suggested = match_activity(topic)
+    meta = {
+        "generated_by": generated_by,
+        "safety_tier": card_type.safety_tier,
+        "rotation_tag": card_type.name,
+    }
+    if generation_meta:
+        meta["llm"] = generation_meta
     return {
         "card_type": card_type.name,
         "difficulty_level": difficulty,
@@ -168,11 +270,7 @@ def _assemble_card(card_type: CardType, difficulty: str, content: dict, generate
         "suggested_activity": suggested,
         "stretch_challenge": content.get("stretch_challenge"),
         "wrap_up_question": content.get("wrap_up_question"),
-        "meta": {
-            "generated_by": generated_by,
-            "safety_tier": card_type.safety_tier,
-            "rotation_tag": card_type.name,
-        },
+        "meta": meta,
     }
 
 
@@ -185,7 +283,8 @@ async def generate_card_content(
     answers = await _recent_answers(db, [p.id for p in profiles])
     context = _build_context(profiles, answers)
 
-    card_type = select_card_type(await _active_card_types(db), await _history(db, space_id))
+    active_types = await _active_card_types(db)
+    card_type = select_card_type(_eligible_card_types(active_types, profiles), await _history(db, space_id))
     if card_type is None:
         raise RuntimeError("no active card types")
 
@@ -199,21 +298,30 @@ async def generate_card_content(
     bank_payload = await pick_bank_payload(db, card_type.id)
     content = build_template_content(card_type.name, bank_payload, difficulty)
     generated_by = "template"
+    generation_meta = None
+    recent_topics = await _recent_topics(db, space_id)
+    source_answers = _source_answer_texts(answers)
 
-    # Tier 1: пробуем LLM (персонализация по ответам), fallback — шаблон.
-    if card_type.name not in BANK_ONLY_TYPES:
-        llm = await generate_llm_content(card_type.name, difficulty, context, theme=theme)
-        if llm:
-            content["main_content"]["topic"] = llm["topic"]
-            content["main_content"]["sub_questions"] = llm["sub_questions"]
-            content["vocab_box"] = llm["vocab_box"]
-            content["stretch_challenge"] = llm.get("stretch_challenge") or content["stretch_challenge"]
-            content["wrap_up_question"] = llm["wrap_up_question"]
-            generated_by = "llm"
+    llm = await generate_llm_content(
+        card_type.name,
+        difficulty,
+        context,
+        theme=theme,
+        recent_topics=recent_topics,
+        bank_payload=bank_payload,
+        group_size=len(profiles),
+        source_answers=source_answers,
+    )
+    if llm:
+        generation_meta = llm.pop("_generation_meta", None)
+        content = llm
+        generated_by = "llm_grounded" if card_type.name in BANK_ONLY_TYPES else "llm"
 
-    card_content = _assemble_card(card_type, difficulty, content, generated_by)
+    card_content = _assemble_card(card_type, difficulty, content, generated_by, generation_meta)
 
     errors = validate_card(card_content)
+    if generated_by.startswith("llm"):
+        errors.extend(check_generated_card_quality(card_content, recent_topics, source_answers))
     if errors:
         # Не прошло валидацию — откатываемся на чистый шаблон (LLM-контент не должен протечь).
         logger.warning("card_validation_failed type=%s errors=%s", card_type.name, errors)
@@ -389,6 +497,7 @@ def _main_sections(main: dict) -> list[dict]:
         sections.append({
             "header": "🗣️ Idiom",
             "widgets": [
+                {"decoratedText": {"topLabel": "Expression", "text": payload["idiom"], "wrapText": True}},
                 {"decoratedText": {"topLabel": "Meaning", "text": payload.get("meaning", ""), "wrapText": True}},
                 {"decoratedText": {"text": f"“{payload.get('example', '')}”", "wrapText": True}},
             ],

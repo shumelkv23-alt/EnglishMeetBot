@@ -38,6 +38,30 @@ _STRETCH_BY_TYPE = {
     "time_capsule": "Write a one-sentence message your future self would understand.",
 }
 
+_QUESTION_LEVELS = ("easy", "medium", "hard")
+
+# Полный и безопасный fallback: даже без LLM карточка остаётся готовым
+# 4-фазным планом с нарастающей сложностью вопросов.
+_DEFAULT_SUB_QUESTIONS: dict[str, list[str]] = {
+    "topic": ["What comes to mind when you hear this topic?", "Why do people have different opinions about it?", "How might it change in the future?"],
+    "debate": ["Which side feels more natural to you at first?", "What is the strongest argument for the other side?", "What would make you change your mind?"],
+    "storytelling": ["Who is the main character in this story?", "What problem could this character face next?", "What surprising ending would make the story memorable?"],
+    "would_you_rather": ["Which option would you choose?", "What is one advantage and one disadvantage of your choice?", "Could your choice be different in ten years? Why?"],
+    "roleplay": ["What would you say first in this situation?", "How could you solve the problem politely?", "How would the conversation change if the first solution failed?"],
+    "culture": ["Have you heard a similar expression before?", "When could you use this expression naturally?", "What does this expression reveal about culture or communication?"],
+    "hot_seat": ["What is an easy question everyone can answer?", "What follow-up question would make the answer more interesting?", "What could the group learn from a different answer?"],
+    "game_day": ["What is the quickest way to explain a difficult word?", "Which strategy would help your team communicate better?", "How could you make the game harder without making it less fun?"],
+    "two_truths": ["What is one harmless fact you could share about yourself?", "How can you make a believable lie without making it too obvious?", "What questions would help you spot a convincing lie?"],
+    "mystery": ["What is your first guess?", "Which clue would you want to know next?", "What is the most surprising explanation that could still make sense?"],
+    "news_reaction": ["What is your first reaction to this story?", "Who could benefit from this change, and who might not?", "How could this trend affect everyday life in the future?"],
+    "time_capsule": ["What is one detail you would include?", "What would surprise a person from another time?", "What advice would you leave for your future or past self?"],
+}
+
+_GENERIC_VOCAB = [
+    {"phrase": "In my opinion, …", "translation": "по моему мнению", "example": "In my opinion, this is a great idea."},
+    {"phrase": "I see what you mean, but …", "translation": "понимаю, о чём ты, но…", "example": "I see what you mean, but I disagree."},
+]
+
 
 async def pick_bank_payload(
     db: AsyncSession, card_type_id: int, rng: random.Random | None = None
@@ -105,52 +129,77 @@ def _main_content(card_type_name: str, topic: str, p: dict) -> dict:
 
 
 def _sub_questions(card_type_name: str, p: dict) -> list[dict]:
-    """Под-вопросы: из банка (topic/hot_seat/time_capsule) или по механике типа."""
-    if p.get("sub_questions"):
-        return list(p["sub_questions"])
-    if p.get("questions"):
-        return [{"text": q, "level": "easy"} for q in p["questions"]]
+    """Вернуть ровно три уникальных вопроса easy → medium → hard."""
+    raw = p.get("sub_questions") or p.get("questions") or []
+    if not isinstance(raw, list):
+        raw = []
 
-    q = {
-        "would_you_rather": "Which would you choose and why?",
-        "debate": "Which side do you agree with, and why?",
-        "news_reaction": "What's your reaction to this news?",
-        "culture": "Does your culture have an equivalent? How is it different?",
-        "storytelling": "What happens next?",
-        "roleplay": "What would you say in this situation?",
-        "two_truths": "Which statement is the lie?",
-    }.get(card_type_name)
-    return [{"text": q, "level": "medium"}] if q else []
+    questions: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = item.get("text") if isinstance(item, dict) else item
+        text = str(text or "").strip()
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        questions.append({"text": text, "level": _QUESTION_LEVELS[len(questions)]})
+        if len(questions) == 3:
+            return questions
+
+    for text in _DEFAULT_SUB_QUESTIONS.get(card_type_name, _DEFAULT_SUB_QUESTIONS["topic"]):
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        questions.append({"text": text, "level": _QUESTION_LEVELS[len(questions)]})
+        if len(questions) == 3:
+            break
+    return questions
 
 
 def _type_specific(card_type_name: str, p: dict) -> dict:
     """type_specific_payload по типу карточки."""
     if card_type_name == "would_you_rather":
-        return {"option_a": p.get("option_a", ""), "option_b": p.get("option_b", "")}
+        return {
+            "option_a": p.get("option_a", "Spend a year without music"),
+            "option_b": p.get("option_b", "Spend a year without films"),
+        }
     if card_type_name == "roleplay":
-        return {"scenario": p.get("scenario", ""), "roles": p.get("roles", [])}
+        return {
+            "scenario": p.get("scenario", "You need to solve a small misunderstanding politely."),
+            "roles": p.get("roles", ["Person A", "Person B"]),
+        }
     if card_type_name == "storytelling":
-        return {"starter_sentence": p.get("starter_sentence", "")}
+        return {"starter_sentence": p.get("starter_sentence", "A surprising message arrived just before sunset.")}
     if card_type_name == "culture":
-        return {"idiom": p.get("idiom", ""), "meaning": p.get("meaning", ""), "example": p.get("example", "")}
+        return {
+            "idiom": p.get("idiom", "to be on the same page"),
+            "meaning": p.get("meaning", "to understand each other in the same way"),
+            "example": p.get("example", "Let's talk so we can be on the same page."),
+        }
     if card_type_name == "debate":
-        return {"statement": p.get("statement", ""), "sides": p.get("sides", ["For", "Against"])}
+        return {
+            "statement": p.get("statement", "A four-day work week would improve everyday life."),
+            "sides": p.get("sides", ["For", "Against"]),
+        }
     if card_type_name == "news_reaction":
-        return {"headline": p.get("headline", ""), "summary": p.get("summary", "")}
+        return {
+            "headline": p.get("headline", "Language clubs explore new ways to practise speaking."),
+            "summary": p.get("summary", "The group discusses a safe, general trend in language practice."),
+        }
     if card_type_name == "game_day":
-        return {"activity_id": p.get("activity_id", "")}
+        return {"activity_id": p.get("activity_id", "alias")}
     if card_type_name == "time_capsule":
-        return {"prompt": p.get("prompt", "")}
+        return {"prompt": p.get("prompt", "Imagine one ordinary day in your life ten years from now.")}
     return {}
 
 
 def _vocab_box(card_type_name: str, p: dict) -> list[dict]:
     """Полезная лексика: из банка (culture) или generic-фразы обсуждения."""
     if card_type_name == "culture" and p.get("idiom"):
-        return [{"phrase": p["idiom"], "translation": p.get("meaning", ""), "example": p.get("example", "")}]
-    if card_type_name == "news_reaction" and p.get("headline"):
-        return [{"phrase": p["headline"].split()[0].strip(","), "translation": "", "example": p["headline"]}]
-    return [
-        {"phrase": "In my opinion, …", "translation": "по моему мнению", "example": "In my opinion, this is a great idea."},
-        {"phrase": "I see what you mean, but …", "translation": "понимаю, о чём ты, но…", "example": "I see what you mean, but I disagree."},
-    ]
+        return [
+            {"phrase": p["idiom"], "translation": p.get("meaning", ""), "example": p.get("example", "")},
+            *_GENERIC_VOCAB,
+        ]
+    return list(_GENERIC_VOCAB)
