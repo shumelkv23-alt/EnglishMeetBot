@@ -52,6 +52,19 @@ async def _check_today_quorum() -> None:
         logger.info("quorum_check_job notified day=%s time=%s", DAYS[dow], time_str)
 
 
+async def _close_today_poll() -> None:
+    """Джоб в 14:00 — пометить сегодняшний день в расписании как «passed» (обновить карточку)."""
+    from app.services.weekly_poll import active_weekly_poll, refresh_poll_card
+
+    async with AsyncSessionLocal() as db:
+        poll = await active_weekly_poll(db)
+        if poll is None:
+            logger.info("day_close_job no_active_poll")
+            return
+        await refresh_poll_card(db, poll)
+        logger.info("day_close_job refreshed poll=%s", poll.id)
+
+
 async def _send_day_confirmations(now: datetime | None = None) -> None:
     """Ежедневный вечерний джоб — подтверждение явки на завтра тем, кто проголосовал.
 
@@ -115,10 +128,10 @@ async def _poll_new_members() -> None:
             return
         plan = await check_new_members(db, space_id)
         for ws in plan["dm"]:
-            await asyncio.to_thread(send_message, ws, MessagePayload(text="Привет! Заполни короткую анкету 🙌", card=_onboarding_card("друг")))
+            await asyncio.to_thread(send_message, ws, MessagePayload(text="Hi! Fill in a short form 🙌", card=_onboarding_card("friend")))
         if plan["mention"]:
             mentions = " ".join(f"<{m}>" for m in plan["mention"])
-            await asyncio.to_thread(send_text, space_id, f"{mentions} — напишите мне в личку, чтобы пройти анкету 👋")
+            await asyncio.to_thread(send_text, space_id, f"{mentions} — DM me to fill in the form 👋")
 
 
 async def _run_inactivity_reminder() -> None:
@@ -132,9 +145,19 @@ async def _run_inactivity_reminder() -> None:
 
 async def _run_close_stale_games() -> None:
     """Джоб каждые 30 сек — закрыть просроченные фазы игр (Quiplash/«Кто я?»)."""
-    from app.services.party_games import close_stale_games
+    from app.services.games.party_games import close_stale_games
 
     await close_stale_games()
+
+
+async def _run_cleanup() -> None:
+    """Ежедневный джоб очистки — старые опросы и внутренности сыгранных игр."""
+    from app.services.cleanup import run_cleanup
+
+    async with AsyncSessionLocal() as db:
+        summary = await run_cleanup(db)
+        await db.commit()
+        logger.info("cleanup_job summary=%s", summary)
 
 
 async def _run_fast_cycle(step_seconds: int) -> None:
@@ -149,7 +172,7 @@ async def init_scheduler() -> None:
     global scheduler
     if scheduler is not None:
         return
-    from app.services.weekly_poll import get_or_create_config
+    from app.services.weekly_poll import DAY_CLOSE_HOUR, get_or_create_config
 
     async with AsyncSessionLocal() as db:
         run_h = int((await get_or_create_config(db, "poll_run_hour", 9)).value or 9)
@@ -174,6 +197,10 @@ async def init_scheduler() -> None:
         id="day-confirmations", replace_existing=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
+        _close_today_poll, "cron", hour=DAY_CLOSE_HOUR, minute=0,
+        id="day-close", replace_existing=True, misfire_grace_time=3600,
+    )
+    scheduler.add_job(
         _run_weekly_questions, "cron", day_of_week=weekly_day, hour=weekly_hour, minute=0,
         id="weekly-questions", replace_existing=True, misfire_grace_time=3600,
     )
@@ -195,6 +222,16 @@ async def init_scheduler() -> None:
         max_instances=1,
         misfire_grace_time=60,
     )
+
+    scheduler.add_job(
+        _run_cleanup,
+        "cron",
+        hour=4,
+        minute=0,
+        id="cleanup",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     logger.info("scheduler_started")
 
@@ -205,6 +242,31 @@ def shutdown_scheduler() -> None:
         scheduler.shutdown(wait=False)
         scheduler = None
         logger.info("scheduler_stopped")
+
+
+def unschedule_meeting_jobs(instance_id: int | str) -> None:
+    """Снять джобы напоминания/check-in/карточки для встречи (при её отмене).
+
+    Без этого запланированные джобы «выстрелят» позже по уже отменённой встрече
+    и пошлют в группу вводящие в заблуждение сообщения («встреча через час»).
+    """
+    from app.cards.service import card_job_id
+    from app.services.checkin import job_ids as checkin_job_ids
+    from app.services.reminders import reminder_job_id
+
+    if scheduler is None:
+        return
+    job_ids = [
+        reminder_job_id(str(instance_id)),
+        checkin_job_ids(str(instance_id))["open"],
+        checkin_job_ids(str(instance_id))["close"],
+        card_job_id(str(instance_id)),
+    ]
+    for jid in job_ids:
+        try:
+            scheduler.remove_job(jid)
+        except Exception:
+            logger.debug("unschedule_meeting_jobs no job %s", jid)
 
 
 def schedule_fast_cycle(step_seconds: int) -> None:
@@ -218,5 +280,7 @@ def schedule_fast_cycle(step_seconds: int) -> None:
         args=[step_seconds],
         id="fast-cycle",
         replace_existing=True,
+        max_instances=3,
+        coalesce=False,
     )
     logger.info("fast_cycle_scheduled step_seconds=%s", step_seconds)

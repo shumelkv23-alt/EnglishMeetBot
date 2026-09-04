@@ -11,7 +11,7 @@
 ## Что нужно заранее
 
 - **Docker Desktop** — запущен (БД в контейнере).
-- **ngrok** — туннель до `localhost:8000`.
+- **cloudflared** — туннель до `localhost:8000`.
 - **Второй Google-аккаунт** (или коллега) — чтобы играть роль «нового участника».
 - **Тестовая группа** в Google Chat, куда можно добавить бота.
 
@@ -31,9 +31,9 @@
   ```
 - [ ] Подними туннель:
   ```powershell
-  ngrok http 8000
+  cloudflared tunnel --url http://localhost:8000
   ```
-- [ ] В Google Cloud Console → твоё Chat App → настройка вебхука: впиши новый ngrok-URL
+- [ ] В Google Cloud Console → твоё Chat App → настройка вебхука: впиши новый cloudflared-URL
   в поле вебхука и в "Authentication audience". Обнови `CHAT_APP_AUDIENCE` в `.env`,
   перезапусти бота.
 

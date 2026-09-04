@@ -38,7 +38,7 @@
 | Планировщик | APScheduler 3.10 (async, in-process) |
 | Интеграция с Google | Chat REST API (`chat.bot`) + вебхук, `google-auth` (сервисный аккаунт) |
 | LLM | OpenRouter (OpenAI-совместимый `/chat/completions`), модель `deepseek/deepseek-chat` |
-| Деплой | Docker Compose + ngrok (dev); Cloud Run — в планах |
+| Деплой | Docker Compose + cloudflared (dev); Cloud Run — в планах |
 | Тесты | pytest + pytest-asyncio |
 
 ---
@@ -470,7 +470,7 @@ Invoke-RestMethod http://localhost:8000/api/v1/health
 .\venv\Scripts\pytest -m live -q      # реальные вызовы Google/OpenRouter
 ```
 
-Для живого Google Chat нужен ngrok-туннель + Chat App в GCP. Полная пошаговая инструкция —
+Для живого Google Chat нужен cloudflared-туннель + Chat App в GCP. Полная пошаговая инструкция —
 в `SETUP_SECOND_BOT.md`, чеклист ручной проверки сценариев — в `docs/e2e-scenarios.md`.
 
 ---

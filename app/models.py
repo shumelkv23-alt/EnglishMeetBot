@@ -731,7 +731,8 @@ class GameSession(Base):
     __table_args__ = (
         CheckConstraint(
             "game_type IN ('who_am_i', 'quiplash', 'hangman', 'millionaire', 'wordle', "
-            "'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', 'wheel')",
+            "'two_truths', 'word_puzzle', 'translation', 'words_of_wonders', 'riddles', "
+            "'wheel', 'crossword')",
             name="valid_game_type",
         ),
         CheckConstraint(

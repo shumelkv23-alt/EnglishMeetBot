@@ -69,7 +69,7 @@ async def test_double_start_second_returns_none():
 
     from app.database import AsyncSessionLocal
     from app.models import GameSession
-    from app.services import party_games
+    from app.services.games import party_games
 
     space = "spaces/e2e_double_start"
     state = {"word": "cat"}

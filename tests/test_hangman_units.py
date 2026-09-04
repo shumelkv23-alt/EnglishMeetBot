@@ -1,5 +1,5 @@
 """Юнит-тесты hangman: повторная буква не должна падать с NameError."""
-from app.services.hangman import _apply_guess
+from app.services.games.hangman import _apply_guess
 
 
 class _Session:

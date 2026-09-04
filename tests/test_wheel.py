@@ -1,7 +1,7 @@
 """Тесты игры «Поле чудес» (Wheel of Fortune): подсказка к слову и чистые хелперы."""
 
-from app.services import wheel_game
-from app.services.word_bank import WORDS
+from app.services.games import wheel_game
+from app.services.games.banks.word_bank import WORDS
 
 
 def _wheel_pool() -> list[str]:

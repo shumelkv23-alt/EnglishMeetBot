@@ -58,12 +58,15 @@ async def onboard_space_members(db: AsyncSession, space_name: str) -> dict:
     return plan_onboarding(by_ws, member_ids)
 
 
-async def check_new_members(db: AsyncSession, space_name: str) -> dict:
-    """Найти новых участников и спланировать приглашение в онбординг.
+async def check_new_members(db: AsyncSession, space_name: str, force: bool = False) -> dict:
+    """Найти участников и спланировать приглашение в онбординг.
 
     В отличие от onboard_space_members, помечает onboarding_invite_sent,
     чтобы повторный поллинг не тегал одних и тех же людей. Возвращает
     {'dm': [...], 'mention': [...]} для НОВЫХ участников.
+
+    force=True — онбордить ВСЕХ участников (не только новых): пропускает
+    проверку onboarding_completed/onboarding_invite_sent. Нужно демо-циклу.
     """
     from app.services.chat_sender import list_space_members
     from app.services.onboarding import get_or_create_profile
@@ -79,7 +82,7 @@ async def check_new_members(db: AsyncSession, space_name: str) -> dict:
     dm, mention = [], []
     for ws in member_ids:
         profile = await get_or_create_profile(db, workspace_user_id=ws)
-        if profile.onboarding_completed or profile.onboarding_invite_sent:
+        if not force and (profile.onboarding_completed or profile.onboarding_invite_sent):
             continue
         if profile.chat_space_id:
             dm.append(ws)

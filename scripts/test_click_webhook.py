@@ -34,7 +34,7 @@ FORM_INPUTS = {
     "q7": {"stringInputs": {"value": ["soft"]}},
 }
 
-BUTTON_URL = "https://renewed-ditto-knee.ngrok-free.dev/webhooks/google-chat"
+BUTTON_URL = "https://september-bot.loca.lt/webhooks/google-chat"
 
 
 def _build_addon_click() -> tuple[str, dict]:

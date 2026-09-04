@@ -1,7 +1,9 @@
 """E2E: finalize_day — кворум обязателен, в том числе при завершении кнопкой.
 
 Кнопка «Finish voting» лишь ускоряет проверку (run_cycle), сама finalize_day
-всегда требует кворум. Нужен поднятый Postgres (та же БД, что у бота).
+всегда требует кворум. Кворум считается на КОНКРЕТНОМ слоте (не по сумме за день):
+встреча создаётся, только если одно время набрало quorum_threshold голосов.
+Нужен поднятый Postgres (та же БД, что у бота).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -48,8 +50,8 @@ async def _cleanup(db, poll_id: int) -> None:
 
 @pytest.mark.e2e
 async def test_finalize_day_below_quorum_returns_none(db):
-    # 2 голоса < кворума 3 → встреча НЕ создаётся (в т.ч. по кнопке Finish voting)
-    poll = await _make_poll(db, {"15:00": 2})
+    # 3 голоса < кворума 4 → встреча НЕ создаётся (в т.ч. по кнопке Finish voting)
+    poll = await _make_poll(db, {"15:00": 3})
     try:
         assert await finalize_day(db, poll, TEST_DOW) is None
     finally:
@@ -58,8 +60,8 @@ async def test_finalize_day_below_quorum_returns_none(db):
 
 @pytest.mark.e2e
 async def test_finalize_day_at_quorum_creates_meeting(db):
-    # 3 голоса == кворум 3 → встреча на слоте с max голосов
-    poll = await _make_poll(db, {"15:00": 1, "16:00": 2})
+    # 4 голоса == кворум 4 на одном слоте → встреча на слоте с max голосов
+    poll = await _make_poll(db, {"15:00": 1, "16:00": 4})
     try:
         result = await finalize_day(db, poll, TEST_DOW)
         assert result is not None
@@ -68,6 +70,16 @@ async def test_finalize_day_at_quorum_creates_meeting(db):
         assert meeting.scheduled_start == meeting_start_utc(
             poll.poll_date + timedelta(days=TEST_DOW), slot_datetime("16:00")
         )
+    finally:
+        await _cleanup(db, poll.id)
+
+
+@pytest.mark.e2e
+async def test_finalize_day_split_votes_no_slot_quorum(db):
+    # 3 + 1 = 4 голоса за день, но ни один слот не набрал кворум 4 → None
+    poll = await _make_poll(db, {"15:00": 3, "16:00": 1})
+    try:
+        assert await finalize_day(db, poll, TEST_DOW) is None
     finally:
         await _cleanup(db, poll.id)
 

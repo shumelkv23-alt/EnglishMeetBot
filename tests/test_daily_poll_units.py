@@ -1,5 +1,5 @@
 # tests/test_daily_poll_units.py
-from datetime import date
+from datetime import date, datetime, timezone
 
 from app.services.form_parsing import parse_form_inputs
 from app.services.weekly_poll import (
@@ -7,10 +7,14 @@ from app.services.weekly_poll import (
     _normalize_submit,
     build_confirmation_card,
     build_weekly_poll_card,
+    day_is_closed,
     parse_day,
     slot_datetime,
     week_monday,
 )
+
+# Понедельник 09:00 — детерминированный «сейчас» для тестов карточки.
+MON_9 = datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc)
 
 
 def test_parse_day_names_and_numbers():
@@ -73,7 +77,7 @@ def test_week_monday_returns_monday():
 
 
 def test_build_weekly_poll_card_sections_and_buttons():
-    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", today_dow=0)
+    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", today_dow=0, now=MON_9)
     sections = card["cardsV2"][0]["card"]["sections"]
     assert len(sections) == 2
     assert sections[0]["header"] == "Mon · 0 voted"
@@ -87,7 +91,7 @@ def test_build_weekly_poll_card_sections_and_buttons():
 
 def test_build_weekly_poll_card_shows_counts():
     counts = {(0, "15:00"): 4, (0, "16:00"): 2, (1, "15:00"): 1}
-    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", counts, today_dow=0)
+    card = build_weekly_poll_card([0, 1], ["15:00", "16:00"], "https://x/hook", counts, today_dow=0, now=MON_9)
     sections = card["cardsV2"][0]["card"]["sections"]
     assert sections[0]["header"] == "Mon · 6 voted"
     buttons = sections[0]["widgets"][0]["buttonList"]["buttons"]
@@ -95,7 +99,7 @@ def test_build_weekly_poll_card_shows_counts():
 
 
 def test_build_weekly_poll_card_no_finish_button_by_default():
-    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0)
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, now=MON_9)
     sections = card["cardsV2"][0]["card"]["sections"]
     for section in sections:
         widgets = section.get("widgets", [])
@@ -107,12 +111,60 @@ def test_build_weekly_poll_card_no_finish_button_by_default():
 
 
 def test_build_weekly_poll_card_finish_button():
-    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, show_finish_button=True)
+    # кнопка появляется, когда show_finish_button=True И есть хотя бы один голос
+    counts = {(0, "15:00"): 1}
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", counts, today_dow=0, now=MON_9, show_finish_button=True)
     sections = card["cardsV2"][0]["card"]["sections"]
     last = sections[-1]["widgets"][0]["buttonList"]["buttons"]
     assert len(last) == 1
     p = {x["key"]: x["value"] for x in last[0]["onClick"]["action"]["parameters"]}
     assert p["method"] == "finish_voting"
+
+
+def test_build_weekly_poll_card_finish_button_requires_votes():
+    # без голосов кнопка не появляется даже при show_finish_button=True
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, now=MON_9, show_finish_button=True)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    for section in sections:
+        for w in section.get("widgets", []):
+            if "buttonList" in w:
+                for b in w["buttonList"]["buttons"]:
+                    p = {x["key"]: x["value"] for x in b["onClick"]["action"]["parameters"]}
+                    assert p["method"] != "finish_voting"
+
+
+def test_day_is_closed_past_and_today_boundary():
+    mon_13 = datetime(2024, 1, 1, 13, 0, tzinfo=timezone.utc)
+    mon_14 = datetime(2024, 1, 1, 14, 0, tzinfo=timezone.utc)
+    tue_9 = datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc)
+    # понедельник утром открыт; после 14:00 — закрыт
+    assert day_is_closed(0, 0, mon_13) is False
+    assert day_is_closed(0, 0, mon_14) is True
+    # прошедший день закрыт всегда; сегодняшний будущий день — открыт
+    assert day_is_closed(0, 1, tue_9) is True
+    assert day_is_closed(1, 1, tue_9) is False
+
+
+def test_day_is_closed_ignore_today_close():
+    mon_14 = datetime(2024, 1, 1, 14, 0, tzinfo=timezone.utc)
+    # без флага — сегодня после 14:00 закрыт; с флагом (fast_cycle) — открыт
+    assert day_is_closed(0, 0, mon_14) is True
+    assert day_is_closed(0, 0, mon_14, ignore_today_close=True) is False
+
+
+def test_build_weekly_poll_card_ignore_day_close_keeps_today_buttons():
+    mon_14 = datetime(2024, 1, 1, 14, 0, tzinfo=timezone.utc)
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, now=mon_14, ignore_day_close=True)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    assert sections[0]["header"] == "Mon · 0 voted"
+    assert sections[0]["widgets"][0]["buttonList"]["buttons"]
+
+
+def test_build_weekly_poll_card_today_passed_after_close_hour():
+    mon_14 = datetime(2024, 1, 1, 14, 0, tzinfo=timezone.utc)
+    card = build_weekly_poll_card([0], ["15:00"], "https://x/hook", today_dow=0, now=mon_14)
+    sections = card["cardsV2"][0]["card"]["sections"]
+    assert sections[0]["header"] == "Mon · passed"
 
 
 def test_build_confirmation_card_has_yes_no():

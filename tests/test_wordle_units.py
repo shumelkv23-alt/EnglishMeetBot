@@ -1,5 +1,5 @@
 # tests/test_wordle_units.py
-from app.services.wordle import _sanitize_llm_word
+from app.services.games.wordle import _sanitize_llm_word
 
 
 def test_sanitize_valid_word_unchanged():

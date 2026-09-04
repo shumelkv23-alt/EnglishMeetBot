@@ -27,6 +27,27 @@ DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 
 ALLOWED_SUBMIT_TIMES = frozenset({"15:00", "16:00", "17:00"})
 
+# Голосование за сегодня открыто до 13:00, а с 14:00 день помечается «passed».
+VOTING_CLOSE_HOUR = 13
+DAY_CLOSE_HOUR = 14
+
+
+def _app_now() -> datetime:
+    """Текущий момент в таймзоне приложения."""
+    return datetime.now(ZoneInfo(get_settings().app_timezone))
+
+
+def day_is_closed(day: int, today_dow: int, now: datetime, ignore_today_close: bool = False) -> bool:
+    """День закрыт: он уже прошёл, либо сегодня и наступил час закрытия (14:00).
+
+    ignore_today_close=True (режим fast_cycle) — сегодняшний день не закрывается по времени.
+    """
+    if day < today_dow:
+        return True
+    if day == today_dow and not ignore_today_close and now.hour >= DAY_CLOSE_HOUR:
+        return True
+    return False
+
 
 def parse_day(raw: str) -> int:
     """'Mon' / '0' → 0 (Пн); невалидное → -1."""
@@ -57,22 +78,28 @@ def _is_valid_submit_time(choice: str) -> bool:
 def build_weekly_poll_card(
     days: list[int], times: list[str], action_url: str,
     counts: dict[tuple[int, str], int] | None = None, today_dow: int | None = None,
-    show_finish_button: bool = False,
+    show_finish_button: bool = False, now: datetime | None = None,
+    ignore_day_close: bool = False,
 ) -> dict:
     """Карточка недельного опроса: по секции на день, кнопки времени со счётчиками.
 
     counts — {(day_of_week, "HH:MM"): N}; None → все нули.
     today_dow — индекс сегодняшнего дня (по таймзоне приложения); дни раньше — без кнопок.
-    show_finish_button — кнопка «завершить голосование» (только для fast_cycle).
+    now — текущий момент (для тестов); день, который сегодня и после 14:00, тоже «passed».
+    ignore_day_close — True в режиме fast_cycle: сегодняшний день не закрывается по времени.
+    show_finish_button — кнопка «завершить голосование» (только для fast_cycle);
+    показывается лишь когда уже есть хотя бы один голос.
     """
     counts = counts or {}
+    if now is None:
+        now = _app_now()
     if today_dow is None:
-        today_dow = datetime.now(ZoneInfo(get_settings().app_timezone)).weekday()
+        today_dow = now.weekday()
     sections = []
     for day in days:
         day_name = DAYS[day]
         total = sum(counts.get((day, t), 0) for t in times)
-        if day < today_dow:
+        if day_is_closed(day, today_dow, now, ignore_today_close=ignore_day_close):
             sections.append({
                 "header": f"{day_name} · passed",
                 "widgets": [{"textParagraph": {"text": "This day has passed"}}],
@@ -96,7 +123,7 @@ def build_weekly_poll_card(
             "header": f"{day_name} · {total} voted",
             "widgets": [{"buttonList": {"buttons": buttons}}],
         })
-    if show_finish_button:
+    if show_finish_button and any(counts.values()):
         finish_buttons = [{
             "text": "Finish voting ✅",
             "onClick": {"action": {
@@ -251,9 +278,13 @@ async def submit_poll(db: AsyncSession, profile: Profile, form_inputs: dict) -> 
         return {"ok": False, "reason": "closed"}
 
     day, choice = _normalize_submit(form_inputs)
-    today_dow = datetime.now(ZoneInfo(get_settings().app_timezone)).weekday()
+    now = _app_now()
+    today_dow = now.weekday()
+    fast_cycle = await _fast_cycle_on(db)
     if day < today_dow:
         return {"ok": False, "reason": "past_day"}
+    if day == today_dow and now.hour >= VOTING_CLOSE_HOUR and not fast_cycle:
+        return {"ok": False, "reason": "closed"}
     if day < 0 or not _is_valid_submit_time(choice):
         return {"ok": False, "reason": "empty"}
 
@@ -327,14 +358,16 @@ async def send_weekly_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
     if not space_id:
         return
     days, times, counts = await poll_counts(db, poll.id)
+    fc = await _fast_cycle_on(db)
     card = build_weekly_poll_card(
         days, times, get_settings().chat_app_audience, counts,
-        show_finish_button=await _fast_cycle_on(db),
+        show_finish_button=fc, ignore_day_close=fc,
     )
     from app.services.chat_sender import patch_message, send_message as send_space_message
 
-    # уже есть карточка — обновляем на месте, чтобы не плодить дубликаты
-    if poll.card_message_name:
+    # уже есть карточка В ТЕКУЩЕЙ группе — обновляем на месте, чтобы не плодить дубликаты.
+    # Если бот перенесли в другую группу (space_id сменился), шлём новую карточку туда.
+    if poll.card_message_name and poll.card_message_name.startswith(space_id):
         try:
             await asyncio.to_thread(patch_message, poll.card_message_name, cards_v2=card["cardsV2"])
             return
@@ -354,9 +387,10 @@ async def refresh_poll_card(db: AsyncSession, poll: DailyPoll) -> None:
     if not poll.card_message_name:
         return
     days, times, counts = await poll_counts(db, poll.id)
+    fc = await _fast_cycle_on(db)
     card = build_weekly_poll_card(
         days, times, get_settings().chat_app_audience, counts,
-        show_finish_button=await _fast_cycle_on(db),
+        show_finish_button=fc, ignore_day_close=fc,
     )
     from app.services.chat_sender import patch_message
 
@@ -372,9 +406,11 @@ async def _fast_cycle_on(db: AsyncSession) -> bool:
 
 
 async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> tuple[MeetingInstance, str] | None:
-    """Подвести день: если набрана квота и встречи ещё нет — создать и вернуть (встреча, время).
+    """Подвести день: если один слот набрал квоту и встречи ещё нет — создать и вернуть (встреча, время).
 
-    Возвращает None, если квота не набрана или встреча на этот день уже создана.
+    Квота считается на конкретном слоте (не по сумме голосов за день): встреча
+    создаётся, только если самое популярное время набрало quorum_threshold голосов.
+    Возвращает None, если ни один слот не набрал квоту или встреча на этот день уже создана.
     """
     quorum = int((await get_or_create_config(db, "quorum_threshold", 3)).value or 3)
     slots = (
@@ -384,7 +420,10 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
     ).scalars().all()
     if not slots:
         return None
-    if sum(s.votes_count or 0 for s in slots) < quorum:
+    # Квота — на конкретном слоте: встреча создаётся, только если одно время
+    # набрало quorum_threshold голосов (разброс по разным временам квоту не даёт).
+    best = max(slots, key=lambda s: s.votes_count or 0)
+    if (best.votes_count or 0) < quorum:
         return None
 
     meeting_date = poll.poll_date + timedelta(days=day_of_week)
@@ -393,6 +432,7 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
         await db.execute(
             select(MeetingInstance).where(
                 MeetingInstance.poll_id == poll.id,
+                MeetingInstance.status != "cancelled",
                 MeetingInstance.scheduled_start >= day_start,
                 MeetingInstance.scheduled_start < day_start + timedelta(days=1),
             )
@@ -401,7 +441,6 @@ async def finalize_day(db: AsyncSession, poll: DailyPoll, day_of_week: int) -> t
     if existing is not None:
         return None
 
-    best = max(slots, key=lambda s: s.votes_count or 0)
     duration = int((await get_or_create_config(db, "meeting_duration_minutes", 60)).value or 60)
     slot_start = best.slot_start
     start = meeting_start_utc(meeting_date, slot_start)

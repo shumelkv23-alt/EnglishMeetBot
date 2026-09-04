@@ -1,0 +1,5 @@
+# Caddy автоматически получит Let's Encrypt сертификат для $DOMAIN
+# и будет проксировать всё на uvicorn внутри docker-сети.
+{$DOMAIN} {
+    reverse_proxy app:8000
+}

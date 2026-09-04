@@ -1,11 +1,19 @@
 # app/main.py
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.api.health import router as health_router
 from app.api.google_chat import router as google_chat_router
+
+# Windows: stdout/stderr по умолчанию в cp1251, а в логах встречаются эмодзи —
+# без этого каждый такой лог валится с UnicodeEncodeError и засоряет err-лог.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 settings = get_settings()
 
@@ -45,6 +53,11 @@ app = FastAPI(
 
 app.include_router(health_router, prefix="/api/v1", tags=["Health"])
 app.include_router(google_chat_router)
+
+# Отдача сгенерированных изображений игр (например, сетка кроссворда) через /static.
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(os.path.join(_STATIC_DIR, "crosswords"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 @app.get("/")
 async def root():

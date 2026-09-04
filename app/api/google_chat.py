@@ -8,7 +8,6 @@ from google.auth.transport import requests as grequests
 from google.oauth2 import id_token
 
 from app.config import get_settings
-from app.services.games.session import GameManager, build_join_card
 from app.database import AsyncSessionLocal
 from app.services.onboarding import (
     ONBOARDING_QUESTION,
@@ -18,197 +17,76 @@ from app.services.onboarding import (
 from app.services.onboarding_answers import save_onboarding_answers
 from app.services.levels import build_level_card, level_choice_items, levels_description, normalize_level
 
+from app.api.cards_helpers import (
+    _action_method,
+    _addon_response,
+    _addon_update_message,
+    _dm_space_name,
+    _extract_space_dict,
+    _hangman_update,
+    _normalize_params,
+    _params_dict,
+    _reply_text,
+    _space_is_dm,
+)
+from app.api.games import (
+    _alias_command_response,
+    _dm_games_command_response,
+    _game_command_response,
+    _game_response,
+    _games_command_response,
+    _handle_alias_action,
+    _handle_crossword_action,
+    _handle_game_action,
+    _handle_game_dm_message,
+    _handle_game_message,
+    _handle_games_menu_action,
+    _handle_guesspionage_submit_guess,
+    _handle_guesspionage_vote,
+    _handle_hangman_action,
+    _handle_join_game,
+    _handle_millionaire_action,
+    _handle_riddles_action,
+    _handle_snake_action,
+    _handle_spy_start_vote,
+    _handle_spy_vote,
+    _handle_start_game,
+    _handle_translation_action,
+    _handle_two_truths_action,
+    _handle_wheel_action,
+    _handle_word_puzzle_action,
+    _handle_wordle_action,
+    _handle_words_of_wonders_action,
+    _is_alias_command,
+    _is_games_command,
+    _is_leaderboard_command,
+    _is_points_command,
+    _is_slash_command,
+    _is_snake_command,
+    _leaderboard_text,
+    _ratings_menu_card,
+    _snake_command_response,
+    _start_game_from_command,
+)
+
 router = APIRouter(prefix="/webhooks", tags=["Google Chat"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-GAME_COMMANDS = ("guesspionage", "spy")
-GAME_TITLES = {"guesspionage": "Guesspionage English", "spy": "Spy"}
-MIN_PLAYERS = {"guesspionage": 2, "spy": 3}
 
 
-def _is_slash_command(raw_text: str) -> str | None:
-    """Извлечь имя игры из текста вида '/spy' или '!spy'. Возвращает 'guesspionage'/'spy'/None.
-
-    Google Chat перехватывает '/...' как нативную слэш-команду и не доставляет её как
-    MESSAGE, поэтому реальный триггер в чате — '!' (слэш остаётся для тестов, которые
-    шлют запросы напрямую в обход Google).
-    """
-    text = raw_text.strip().lower()
-    for prefix in ("/", "!"):
-        if text.startswith(prefix):
-            name = text[1:].split()[0] if text[1:].strip() else ""
-            if name in GAME_COMMANDS:
-                return name
-    return None
 
 
-def _game_command_response(game: str, space_name: str) -> dict:
-    """Создать сессию (если ещё нет) и вернуть карточку «Кто играет?»."""
-    if GameManager.get(space_name) is not None:
-        return {"text": "A game is already running in this chat — wait for the round to end."}
-    GameManager.start(game, space_name)
-    return build_join_card(settings.chat_app_audience, GAME_TITLES[game])
 
 
-def _normalize_params(raw) -> dict[str, str]:
-    """parameters из события в плоский {key: value} (понимает list[{key,value}] и dict)."""
-    if isinstance(raw, dict):
-        return {str(k): str(v) for k, v in raw.items() if k and k != "__action_method_name__"}
-    if isinstance(raw, list):
-        return {str(p.get("key")): str(p.get("value")) for p in raw if isinstance(p, dict) and p.get("key")}
-    return {}
 
 
-def _params_dict(common: dict) -> dict:
-    """Параметры клика как dict (список [{key,value}] → {key: value})."""
-    params = common.get("parameters") or {}
-    if isinstance(params, list):
-        return {p.get("key"): p.get("value") for p in params if isinstance(p, dict)}
-    return params if isinstance(params, dict) else {}
-
-
-def _handle_join_game(user: dict, space: dict, message_name: str | None = None) -> JSONResponse:
-    """Кнопка «Я в деле»: добавить игрока и обновить карточку счётчиком (без уведомления)."""
-    space_name = space.get("name", "")
-    user_id = user.get("name", "")
-    session = GameManager.join(space_name, user_id, user.get("displayName", ""))
-    if session is None:
-        return JSONResponse(content={})
-    card = build_join_card(settings.chat_app_audience, GAME_TITLES[session.game], session.players, session.names)
-    if message_name:
-        return _addon_update_message(message_name, card)
-    return JSONResponse(content={})
-
-
-def _start_session_game(session, space_name: str, action_url: str) -> dict:
-    if session.game == "guesspionage":
-        from app.services.games.guesspionage import start_guesspionage
-
-        return start_guesspionage(session, space_name, action_url)
-    if session.game == "spy":
-        from app.services.games.spy import start_spy
-
-        return start_spy(session, action_url)
-    return {"text": "Game mechanics not wired up yet."}
-
-
-def _handle_start_game(space: dict) -> JSONResponse:
-    """Кнопка «Начать»: валидация по числу игроков и запуск."""
-    space_name = space.get("name", "")
-    session = GameManager.get(space_name)
-    if session is None or session.started:
-        return JSONResponse(content={})
-    min_players = MIN_PLAYERS.get(session.game, 2)
-    if len(session.players) < min_players:
-        return _addon_response({"text": f"Need at least {min_players} players to start."})
-    session.started = True
-    return _addon_response(_start_session_game(session, space_name, settings.chat_app_audience))
-
-
-def _handle_guesspionage_submit_guess(user: dict, form_inputs: dict, params: dict) -> JSONResponse:
-    """Называющий прислал число (из лички): принять и огласить группе."""
-    from app.services.games.guesspionage import submit_guess
-
-    space_name = params.get("space", "")
-    session = GameManager.get(space_name)
-    if session is None:
-        return JSONResponse(content={})
-    result = submit_guess(session, user.get("name", ""), form_inputs, space_name, settings.chat_app_audience)
-    return _addon_response(result)
-
-
-async def _handle_guesspionage_vote(user: dict, space: dict, params: dict) -> JSONResponse:
-    """Голос «выше/ниже» из группы."""
-    from app.services.games.guesspionage import vote as guesspionage_vote
-
-    space_name = space.get("name", "")
-    session = GameManager.get(space_name)
-    if session is None:
-        return JSONResponse(content={})
-    choice = params.get("choice", "higher")
-    async with AsyncSessionLocal() as db:
-        result = await guesspionage_vote(db, session, user.get("name", ""), choice, space_name)
-    if result is None:
-        return JSONResponse(content={})
-    return _addon_response(result)
-
-
-def _handle_spy_start_vote(space: dict) -> JSONResponse:
-    """Кнопка «Начать голосование»: показать карточку «Кто шпион?»."""
-    from app.services.games.spy import build_spy_vote_card
-
-    session = GameManager.get(space.get("name", ""))
-    if session is None:
-        return JSONResponse(content={})
-    return _addon_response(build_spy_vote_card(session.names, session.players, settings.chat_app_audience))
-
-
-async def _handle_spy_vote(user: dict, space: dict, params: dict, message_name: str | None = None) -> JSONResponse:
-    """Голос «кто шпион»: живое обновление карточки, в конце — итог."""
-    from app.services.games.spy import vote as spy_vote
-
-    space_name = space.get("name", "")
-    session = GameManager.get(space_name)
-    if session is None:
-        return JSONResponse(content={})
-    target = params.get("target", "")
-    async with AsyncSessionLocal() as db:
-        result = await spy_vote(db, session, user.get("name", ""), target, space_name, settings.chat_app_audience)
-    if result is None:
-        return JSONResponse(content={})
-    if "cardsV2" in result and message_name:
-        return _addon_update_message(message_name, result)
-    return _addon_response(result)
 
 
 # ---------------------------------------------------------------------------
 # Игры из tree-проекта: Alias, Snake Oil, «Кто я?»/Quiplash + меню «games»
 # ---------------------------------------------------------------------------
 
-def _points_word(n: int) -> str:
-    """English pluralization: 1 point, N points."""
-    return "point" if n == 1 else "points"
-
-
-def _is_leaderboard_command(raw_text: str) -> bool:
-    """Пользователь просит показать рейтинги по играм (команда «top»)."""
-    lowered = raw_text.lower().strip(" .!?")
-    return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "top", "leaderboard",
-    ))
-
-
-def _is_points_command(raw_text: str) -> bool:
-    """Пользователь просит показать общий лидерборд баллов (не по играм)."""
-    lowered = raw_text.lower().strip(" .!?")
-    return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "points",
-    ))
-
-
-def _is_alias_command(raw_text: str) -> bool:
-    """Пользователь хочет запустить игру Alias."""
-    lowered = raw_text.lower().strip(" .!?")
-    return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "alias",
-    ))
-
-
-def _is_snake_command(raw_text: str) -> bool:
-    """Пользователь хочет запустить игру Snake Oil / «Змеиное масло»."""
-    lowered = raw_text.lower().strip(" .!?")
-    return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "snake", "snakeoil",
-    ))
-
-
-def _is_games_command(raw_text: str) -> bool:
-    """Пользователь просит меню выбора игры."""
-    lowered = raw_text.lower().strip(" .!?")
-    return any(lowered == t or lowered.startswith(t + " ") for t in (
-        "games", "game",
-    ))
 
 
 def _is_level_command(raw_text: str) -> bool:
@@ -225,16 +103,6 @@ def _is_level_command(raw_text: str) -> bool:
     return any(text == t or text.startswith(t + " ") for t in ("level", "lvl"))
 
 
-def _game_command(raw_text: str) -> str | None:
-    """Команда запуска игры из текста сообщения («кто я» / Quiplash / «Поле чудес»)."""
-    lowered = raw_text.lower().strip()
-    if "who am i" in lowered:
-        return "who_am_i"
-    if "quiplash" in lowered:
-        return "quiplash"
-    if "wheel of fortune" in lowered or "field of miracles" in lowered:
-        return "wheel"
-    return None
 
 
 def _is_learn_command(raw_text: str) -> bool:
@@ -264,6 +132,20 @@ def _is_info_command(raw_text: str) -> bool:
     ))
 
 
+def _is_mode_command(raw_text: str) -> bool:
+    """Команда «показать выбор режима» (demo/orig).
+
+    Google шлёт ADDED_TO_SPACE только один раз — при первом добавлении бота в
+    пространство. При повторном добавлении (бот уже участник) или после перезапуска
+    событие не приходит, и стартовую карточку некому отправить. Поэтому разрешаем
+    вызвать её вручную командой «mode» / «demo» / «запуск» и т.п.
+    """
+    lowered = raw_text.lower().strip(" .!?")
+    return any(lowered == t or lowered.startswith(t + " ") for t in (
+        "mode", "demo", "setup", "run", "режим", "демо", "запуск",
+    ))
+
+
 def _info_card(is_dm: bool) -> dict:
     """Карточка «info»: назначение бота и его возможности (в личке или в группе)."""
     purpose = (
@@ -282,7 +164,7 @@ def _info_card(is_dm: bool) -> dict:
             {"header": "Solo games 🎮", "widgets": [{"textParagraph": {"text": (
                 "`games` — solo games vs the bot:\n"
                 "💀 Hangman · 💎 Millionaire · 🟩 Wordle · 🤥 Two truths & a lie\n"
-                "🧩 Word puzzle · 🔤 Translate it · 🔠 Words of Wonders · 🤔 Riddles"
+                "🧩 Word puzzle · 🔤 Translate it · 🔠 Words of Wonders · 🤔 Riddles · ✏️ Crossword"
             )}}]},
             {"header": "Progress & leaderboards 📈", "widgets": [{"textParagraph": {"text": (
                 "`points` — your points and the overall leaderboard\n"
@@ -322,16 +204,6 @@ def _info_card(is_dm: bool) -> dict:
     }]}
 
 
-async def _wheel_setup(space_name: str) -> dict:
-    """Создать партию «Поле чудес» (DB-сессия) и вернуть результат для вебхука."""
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import wheel_game
-
-            return await wheel_game.setup_wheel(db, space_name)
-    except Exception:
-        logger.exception("wheel_setup_failed space=%s", space_name)
-        return {"text": "Couldn't start the game 🤒"}
 
 
 async def _callready_menu_response(chat_data: dict) -> JSONResponse:
@@ -378,469 +250,16 @@ async def _leveled_menu_response(chat_data: dict) -> JSONResponse:
         return _addon_response({"text": "Couldn't open English by level 🤒"})
 
 
-def _alias_response(result: dict) -> JSONResponse:
-    """Ответ на действие Alias: silent → пусто, cards_v2 → обновить карточку, иначе текст."""
-    if result.get("silent"):
-        return JSONResponse(content={})
-    if result.get("cards_v2"):
-        return _addon_update_response(result["cards_v2"], text=result.get("text", ""))
-    return _addon_response({"text": result.get("text", "Done")})
 
 
-def _snake_response(result: dict) -> JSONResponse:
-    """Ответ на действие Snake Oil: silent → пусто, cards_v2 → обновить, иначе текст."""
-    if result.get("silent"):
-        return JSONResponse(content={})
-    if result.get("cards_v2"):
-        return _addon_update_response(result["cards_v2"], text=result.get("text", ""))
-    return _addon_response({"text": result.get("text", "Done")})
 
 
-def _game_response(result: dict) -> JSONResponse:
-    """Ответ на действие Quiplash/«Кто я?»: silent → пусто, cards_v2 → обновить, иначе текст."""
-    if not result:
-        return JSONResponse(content={})
-    if result.get("silent"):
-        return JSONResponse(content={})
-    if result.get("cards_v2"):
-        return _addon_update_response(result["cards_v2"], text=result.get("text", ""))
-    return _addon_response({"text": result.get("text", "Done")})
 
 
-async def _handle_alias_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Обработать клик по кнопке игры Alias (join/start/guess/skip/last/adjust/confirm/finish)."""
-    params = _normalize_params(common.get("parameters"))
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import alias_game
-
-            if method == "alias_join":
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
-                result = await alias_game.join_team(
-                    db, profile,
-                    int(params.get("game_id", 0) or 0),
-                    int(params.get("team_id", 0) or 0),
-                )
-                return _alias_response(result)
-            if method == "alias_start":
-                result = await alias_game.start_game(db, int(params.get("game_id", 0) or 0))
-                return _alias_response(result)
-            if method == "alias_guess":
-                result = await alias_game.guess_word(db, int(params.get("round_id", 0) or 0))
-                return _alias_response(result)
-            if method == "alias_skip":
-                result = await alias_game.skip_word(db, int(params.get("round_id", 0) or 0))
-                return _alias_response(result)
-            if method == "alias_last":
-                result = await alias_game.last_word(
-                    db,
-                    int(params.get("round_id", 0) or 0),
-                    int(params.get("team_id", 0) or 0),
-                )
-                return _alias_response(result)
-            if method == "alias_adjust":
-                result = await alias_game.adjust_points(
-                    db,
-                    int(params.get("round_id", 0) or 0),
-                    int(params.get("delta", 0) or 0),
-                )
-                return _alias_response(result)
-            if method == "alias_confirm":
-                result = await alias_game.confirm_round(db, int(params.get("round_id", 0) or 0))
-                return _alias_response(result)
-            if method == "alias_finish":
-                result = await alias_game.finish_game(db, int(params.get("game_id", 0) or 0))
-                return _alias_response(result)
-    except Exception:
-        logger.exception("alias_action_failed method=%s", method)
-        return _addon_response({"text": "Couldn't perform the action 🤒"})
-    logger.info("event=BUTTON_CLICKED alias_unknown method=%r", method)
-    return JSONResponse(content={})
 
 
-async def _alias_command_response(chat_data: dict, raw_text: str = "") -> JSONResponse:
-    """Команда «алиас»: создать игру и карточку в группе (проактивно)."""
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-    if not space_name or not space_name.startswith("spaces/"):
-        return _addon_response({"text": "Couldn't determine the space 🤷"})
-    if _space_is_dm(space):
-        return _addon_response({"text": "Alias is better launched in a group 🙂"})
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import alias_game
-
-            if alias_game.is_test_command(raw_text):
-                user = chat_data.get("user", {})
-                workspace_user_id = user.get("name", "")
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                result = await alias_game.setup_test_game(
-                    db, space_name, profile, alias_game.test_target(raw_text),
-                )
-            else:
-                result = await alias_game.game_from_command(db, space_name, raw_text)
-    except Exception:
-        logger.exception("alias_setup_failed")
-        return _addon_response({"text": "Couldn't create the game 🤒"})
-    return _alias_response(result)
 
 
-async def _handle_snake_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Обработать клик по кнопке игры Snake Oil (join/start/vote/finish/solo_ready)."""
-    params = _normalize_params(common.get("parameters"))
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import snake_oil
-
-            if method == "snake_join":
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
-                result = await snake_oil.join_game(db, profile, int(params.get("game_id", 0) or 0))
-                return _snake_response(result)
-            if method == "snake_start":
-                result = await snake_oil.start_game(db, int(params.get("game_id", 0) or 0))
-                return _snake_response(result)
-            if method == "snake_vote":
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(db, workspace_user_id=workspace_user_id)
-                result = await snake_oil.vote(
-                    db,
-                    int(params.get("round_id", 0) or 0),
-                    int(params.get("offer_id", 0) or 0),
-                    profile,
-                )
-                return _snake_response(result)
-            if method == "snake_solo_ready":
-                result = await snake_oil.solo_ready(db, int(params.get("round_id", 0) or 0))
-                return _snake_response(result)
-            if method == "snake_finish":
-                result = await snake_oil.finish_game(db, int(params.get("game_id", 0) or 0))
-                return _snake_response(result)
-    except Exception:
-        logger.exception("snake_action_failed method=%s", method)
-        return _addon_response({"text": "Couldn't perform the action 🤒"})
-    logger.info("event=BUTTON_CLICKED snake_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _snake_command_response(chat_data: dict, raw_text: str = "") -> JSONResponse:
-    """Команда «снейк»: создать игру и карточку в группе (проактивно)."""
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-    if not space_name or not space_name.startswith("spaces/"):
-        return _addon_response({"text": "Couldn't determine the space 🤷"})
-    if _space_is_dm(space):
-        return _addon_response({"text": "Snake Oil is better launched in a group 🧪"})
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import snake_oil
-
-            if snake_oil.is_test_command(raw_text):
-                user = chat_data.get("user", {})
-                workspace_user_id = user.get("name", "")
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                result = await snake_oil.setup_test_game(
-                    db, space_name, profile, snake_oil.test_target(raw_text),
-                )
-            else:
-                result = await snake_oil.game_from_command(db, space_name, raw_text)
-    except Exception:
-        logger.exception("snake_setup_failed")
-        return _addon_response({"text": "Couldn't create the game 🤒"})
-    return _snake_response(result)
-
-
-async def _space_human_members(space_name: str) -> list[str]:
-    """Human-участники space (user_id вида 'users/...'). Пусто при ошибке."""
-    if not space_name:
-        return []
-    try:
-        from app.services.chat_sender import list_space_members
-
-        memberships = await asyncio.to_thread(list_space_members, space_name)
-    except Exception:
-        logger.exception("list_space_members_failed space=%s", space_name)
-        return []
-    return [
-        m["member"]["name"]
-        for m in memberships
-        if m.get("member", {}).get("type") == "HUMAN"
-        and "users/" in m["member"].get("name", "")
-    ]
-
-
-async def _start_game_from_command(space_name: str, user: dict, raw_text: str) -> dict | None:
-    """Запустить игру по команде. None — это не команда игры."""
-    cmd = _game_command(raw_text)
-    if cmd is None:
-        return None
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import party_games
-
-            workspace_user_id = user.get("name", "")
-
-            if cmd == "quiplash":
-                if party_games.is_test_command(raw_text):
-                    if not workspace_user_id:
-                        return {"text": "Couldn't identify you 😕"}
-                    profile = await get_or_create_profile(
-                        db, workspace_user_id=workspace_user_id,
-                        email=user.get("email"), display_name=user.get("displayName"),
-                    )
-                    return await party_games.setup_quiplash_test(db, space_name, profile)
-                return await party_games.setup_quiplash(db, space_name)
-
-            # «кто я»
-            if party_games.is_test_command(raw_text):
-                if not workspace_user_id:
-                    return {"text": "Couldn't identify you 😕"}
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                return await party_games.setup_who_am_i_test(db, space_name, profile)
-            player_ids = await _space_human_members(space_name) or [workspace_user_id]
-            return await party_games.start_who_am_i(db, space_name, player_ids)
-    except Exception:
-        logger.exception("game_start_failed")
-        return {"text": "Couldn't start the game 🤕"}
-
-
-async def _handle_game_message(space_name: str, user: dict, raw_text: str) -> dict | None:
-    """Обработать сообщение как ход игры. None — активной игры нет."""
-    user_id = user.get("name", "")
-    if not user_id:
-        return None
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import party_games
-
-            return await party_games.handle_message(db, space_name, user_id, raw_text)
-    except Exception:
-        logger.exception("game_message_failed")
-        return {"text": "Error processing the game move 🤕"}
-
-
-async def _handle_game_dm_message(user: dict, raw_text: str) -> dict | None:
-    """Сообщение в личку во время игры (ответ Quiplash / «мой секрет»). None — нет игры."""
-    user_id = user.get("name", "")
-    if not user_id:
-        return None
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import party_games
-
-            return await party_games.handle_dm_message(db, user_id, raw_text)
-    except Exception:
-        logger.exception("game_dm_message_failed")
-        return {"text": "Error processing the answer 🤕"}
-
-
-async def _handle_game_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Обработать клик по карточке Quiplash (join/start/answer/vote/finish)."""
-    params = _normalize_params(common.get("parameters"))
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    game_id = int(params.get("game_id", 0) or 0)
-    if not game_id:
-        return _game_response({"text": "Game not found 🤷"})
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import party_games
-
-            if method == "game_join":
-                if not workspace_user_id:
-                    return _game_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                result = await party_games.join_quiplash(db, profile, game_id)
-            else:
-                result = await party_games.handle_card_action(
-                    db, game_id, workspace_user_id, method, form_inputs, params,
-                )
-            return _game_response(result)
-    except Exception:
-        logger.exception("game_action_failed method=%s", method)
-        return _game_response({"text": "Error processing the action 🤕"})
-
-
-def _games_menu_card(action_url: str) -> dict:
-    """Карточка-меню выбора игры: только мультиплеер (все 6 игр)."""
-
-    def _btn(text: str, method: str) -> dict:
-        return {
-            "text": text,
-            "onClick": {"action": {
-                "function": action_url,
-                "parameters": [{"key": "method", "value": method}],
-            }},
-        }
-
-    return {"cardsV2": [{
-        "cardId": "gamesMenu",
-        "card": {
-            "header": {"title": "Choose a game 🎮", "subtitle": "Press a button — the game starts in the group"},
-            "sections": [{"widgets": [{"buttonList": {"buttons": [
-                _btn("🎲 Alias", "menu_alias"),
-                _btn("🧪 Snake Oil", "menu_snake"),
-                _btn("🎮 Quiplash", "menu_quiplash"),
-                _btn("🎭 Who am I?", "menu_who_am_i"),
-                _btn("🕵️ Spy", "menu_spy"),
-                _btn("📊 Guesspionage", "menu_guesspionage"),
-                _btn("🎡 Wheel Game", "menu_wheel"),
-            ]}}]}],
-        },
-    }]}
-
-
-def _alias_setup_card(action_url: str) -> dict:
-    """Второй шаг меню: настройка Alias (цель + названия команд)."""
-
-    def _btn(text: str, method: str) -> dict:
-        return {
-            "text": text,
-            "onClick": {"action": {
-                "function": action_url,
-                "parameters": [{"key": "method", "value": method}],
-            }},
-        }
-
-    return {"cardsV2": [{
-        "cardId": "aliasSetup",
-        "card": {
-            "header": {"title": "Alias setup 🎲", "subtitle": "Empty field = default value"},
-            "sections": [{"widgets": [
-                {"textInput": {"name": "alias_target", "label": "Target points (default 15)"}},
-                {"textInput": {
-                    "name": "alias_teams",
-                    "label": "Team names separated by spaces (default 'Team 1' 'Team 2')",
-                }},
-                {"buttonList": {"buttons": [_btn("▶️ Create game", "menu_alias_create")]}},
-            ]}],
-        },
-    }]}
-
-
-async def _games_command_response(chat_data: dict) -> JSONResponse:
-    """Команда «игры»: показать меню выбора игры."""
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-    if not space_name or not space_name.startswith("spaces/"):
-        return _addon_response({"text": "Couldn't determine the space 🤷"})
-    if _space_is_dm(space):
-        return _addon_response({"text": "Games are better launched in a group 🙂"})
-    return _addon_response(_games_menu_card(settings.chat_app_audience))
-
-
-async def _handle_games_menu_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопке меню игр: показать настройку или создать и запустить игру."""
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-    if not space_name or not space_name.startswith("spaces/"):
-        return _addon_response({"text": "Couldn't determine the space 🤷"})
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    action_url = settings.chat_app_audience
-
-    # Второй шаг для Alias: вместо меню показываем форму настройки.
-    if method == "menu_alias":
-        return _addon_update_response(_alias_setup_card(action_url)["cardsV2"])
-
-    # Существующие in-memory игры (Шпион / Guesspionage) — карточка «Кто играет?».
-    if method in ("menu_spy", "menu_guesspionage"):
-        game = "spy" if method == "menu_spy" else "guesspionage"
-        return _addon_response(_game_command_response(game, space_name))
-
-    # «Поле чудес» — DB-сессия, карточка-лобби постится проактивно.
-    if method == "menu_wheel":
-        return _game_response(await _wheel_setup(space_name))
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import alias_game, snake_oil
-            from app.services.form_parsing import parse_form_inputs
-
-            # Snake Oil — запускается сразу (настроек нет).
-            if method == "menu_snake":
-                result = await snake_oil.game_from_command(db, space_name, "снейк")
-                return _snake_response(result)
-
-            # Quiplash создаётся в setup-режиме (игроки присоединяются кнопкой);
-            # «Кто я?» — запускается сразу (участники = human-члены space).
-            if method == "menu_quiplash":
-                from app.services import party_games
-                return _game_response(await party_games.setup_quiplash(db, space_name))
-            if method == "menu_who_am_i":
-                from app.services import party_games
-                player_ids = await _space_human_members(space_name)
-                if not player_ids:
-                    player_ids = [workspace_user_id] if workspace_user_id else []
-                result = await party_games.start_who_am_i(db, space_name, player_ids)
-                return _game_response(result)
-
-            # Создание Alias по значениям из формы.
-            if method == "menu_alias_create":
-                values = parse_form_inputs(common.get("formInputs", {}) or {})
-                target = (values.get("alias_target") or [""])[0].strip()
-                teams = (values.get("alias_teams") or [""])[0].strip()
-                parts = ["алиас"]
-                if target.isdigit():
-                    parts.append(target)
-                if teams:
-                    parts.extend(teams.split())
-                result = await alias_game.game_from_command(db, space_name, " ".join(parts))
-                if result.get("ok"):
-                    return _addon_update_response(text="✅ Game created, see below 👇")
-                return _alias_response(result)
-
-            # Обучение «Survival English for Calls» — меню курса в личке (новое сообщение).
-            if method == "menu_callready":
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                from app.services import callready
-                return _addon_response(await callready.learn_menu(db, profile))
-
-            # «English by level» — меню уровней A/B/C в личке (новое сообщение).
-            if method == "menu_leveled":
-                if not workspace_user_id:
-                    return _addon_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                from app.services import leveled
-                return _addon_response(await leveled.level_menu(db, profile))
-    except Exception:
-        logger.exception("games_menu_action_failed method=%s", method)
-        return _addon_response({"text": "Couldn't start the game 🤒"})
-    logger.info("event=BUTTON_CLICKED games_menu_unknown method=%r", method)
-    return JSONResponse(content={})
 
 
 async def _handle_callready_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
@@ -979,41 +398,6 @@ async def _handle_leveled_action(chat_data: dict, common: dict, method: str) -> 
     return JSONResponse(content={})
 
 
-async def _handle_wheel_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Обработать клик по карточке «Поле чудес» (join/start/spin/guess/finish)."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    game_id = int(params.get("game_id", 0) or 0)
-    if not game_id:
-        return _game_response({"text": "Game not found 🤷"})
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import wheel_game
-
-            if method == "wheel_join":
-                if not workspace_user_id:
-                    return _game_response({"text": "Couldn't identify you 😕"})
-                profile = await get_or_create_profile(
-                    db, workspace_user_id=workspace_user_id,
-                    email=user.get("email"), display_name=user.get("displayName"),
-                )
-                result = await wheel_game.join_wheel(db, profile, game_id)
-            elif method == "wheel_start":
-                result = await wheel_game.start_wheel_game(db, game_id)
-            elif method == "wheel_spin":
-                result = await wheel_game.wheel_spin(db, game_id, workspace_user_id)
-            elif method == "wheel_guess":
-                result = await wheel_game.wheel_guess(db, game_id, workspace_user_id, form_inputs)
-            elif method == "wheel_finish":
-                result = await wheel_game.finish_wheel(db, game_id)
-            else:
-                return JSONResponse(content={})
-            return _game_response(result)
-    except Exception:
-        logger.exception("wheel_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
 
 
 _google_request = grequests.Request()
@@ -1035,36 +419,6 @@ def _verify_chat_jwt(authorization: str) -> None:
     )
 
 
-def _space_is_dm(space: dict) -> bool:
-    """True, если пространство — личная переписка (DM) с ботом, а не группа/комната.
-
-    chat_space_id в профиле семантически хранит ТОЛЬКО DM-пространство,
-    поэтому имя группы туда писать нельзя (группа хранится в config["space_id"]).
-    """
-    if not isinstance(space, dict):
-        return False
-    return space.get("type") == "DM" or space.get("spaceType") in ("DM", "DIRECT_MESSAGE")
-
-
-def _extract_space_dict(chat_data: dict) -> dict:
-    """Пространство события как dict (для _space_is_dm) или {}, если не найдено."""
-    for candidate in (
-        chat_data.get("space", {}),
-        chat_data.get("buttonClickedPayload", {}).get("space", {}),
-        chat_data.get("messagePayload", {}).get("space", {}),
-    ):
-        if isinstance(candidate, dict) and isinstance(candidate.get("name"), str):
-            return candidate
-    return {}
-
-
-def _dm_space_name(space: dict) -> str | None:
-    """Имя пространства, если это DM; иначе None (группу в chat_space_id не пишем)."""
-    if _space_is_dm(space):
-        name = space.get("name")
-        if isinstance(name, str) and name.startswith("spaces/"):
-            return name
-    return None
 
 
 async def _handle_checkin_present(chat_data: dict, common: dict) -> JSONResponse:
@@ -1155,9 +509,10 @@ async def _submit_daily_poll(chat_data: dict, common: dict, message_name: str | 
                         poll = await active_weekly_poll(db)
                         if poll is not None:
                             days, times, counts = await poll_counts(db, poll.id)
+                            fc = await _fast_cycle_on(db)
                             updated_card = build_weekly_poll_card(
                                 days, times, settings.chat_app_audience, counts,
-                                show_finish_button=await _fast_cycle_on(db),
+                                show_finish_button=fc, ignore_day_close=fc,
                             )
                     except Exception:
                         # голос уже записан — карточку просто не обновим
@@ -1332,497 +687,38 @@ async def _submit_weekly_question(chat_data: dict, common: dict) -> JSONResponse
     return _addon_response({"text": "Write an answer and press 'Submit answer'."})
 
 
-def _prepend_notice_to_card(cards_v2: list[dict], notice: str) -> list[dict]:
-    """Вставить короткое подтверждение первой строкой первого textParagraph карточки.
-
-    У Google Chat add-on для `updateMessageAction` нет отдельного toast:
-    поле `actionStatus` на верхнем уровне ответа Chat не принимает и валит карточку
-    целиком (красная «unable to process»), поэтому «✅ …» / «✨ … bonus word!»
-    показываем прямо в теле карточки. При следующем ходе карточка перестраивается
-    из состояния, и строка исчезает — как и положено разовому подтверждению.
-    """
-    notice = (notice or "").strip()
-    if not notice:
-        return cards_v2
-    for card_obj in cards_v2:
-        card = card_obj.get("card", {})
-        for section in card.get("sections", []):
-            for widget in section.get("widgets", []):
-                tp = widget.get("textParagraph")
-                if isinstance(tp, dict) and tp.get("text") is not None:
-                    tp["text"] = f"**{notice}**\n\n" + tp["text"]
-                    return cards_v2
-    return cards_v2
-
-
-def _cards_v2_list(cards_v2) -> list[dict]:
-    """Нормализовать `cardsV2` до списка карточек.
-
-    `build_*_card` возвращает `{"cardsV2": [...]}`, но часть ходов оборачивает его
-    повторно: `{"text": …, "cardsV2": build_card(…)}` → получается вложенный
-    `{"cardsV2": {"cardsV2": [...]}}`. Здесь достаём настоящий список; если пришёл
-    уже список (start/reveal/millionaire и т.п.) — возвращаем как есть.
-    """
-    if isinstance(cards_v2, dict) and "cardsV2" in cards_v2:
-        return cards_v2["cardsV2"]
-    return cards_v2
-
-
-def _hangman_update(result: dict) -> JSONResponse:
-    """Ответ на ход ДМ-игры: карточка (cardsV2) → обновить на месте, иначе текст.
-
-    В `updateMessageAction` шлём ТОЛЬКО `cardsV2` (без `text` и без `actionStatus`):
-    add-on не принимает сообщение с одновременно `text`+`cardsV2` и не знает поле
-    `actionStatus` — из-за этого карточка не обновлялась по ходу игры. Короткое
-    подтверждение результата вшиваем первой строкой в саму карточку.
-    """
-    if not result:
-        return JSONResponse(content={})
-    if result.get("cardsV2"):
-        cards = _prepend_notice_to_card(
-            _cards_v2_list(result["cardsV2"]), result.get("text", "")
-        )
-        return _addon_update_response(cards)
-    return _addon_response({"text": result.get("text", "Done")})
-
-
-async def _handle_hangman_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам ДМ-игр: старт «Виселицы», рейтинг, ход, новая игра."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import hangman
-            from app.services.form_parsing import parse_form_inputs
-
-            if method == "hangman_leaderboard":
-                return _addon_response(await hangman.leaderboard_response(db))
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_hangman":
-                return _addon_response(await hangman.start_hangman(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "hangman_guess":
-                values = parse_form_inputs(form_inputs).get("letter") or [""]
-                return _hangman_update(await hangman.guess(db, game_id, profile, values[0]))
-            if method == "hangman_word_guess":
-                values = parse_form_inputs(form_inputs).get("word") or [""]
-                return _hangman_update(await hangman.guess_word(db, game_id, profile, values[0]))
-            if method == "hangman_new":
-                return _hangman_update(await hangman.new_game(db, game_id, profile))
-    except Exception:
-        logger.exception("hangman_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED hangman_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_millionaire_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Миллионера»: старт, ответ, подсказки, новая игра, рейтинг."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import millionaire
-
-            if method == "millionaire_leaderboard":
-                return _addon_response(await millionaire.leaderboard_response(db))
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_millionaire":
-                return _addon_response(await millionaire.start_millionaire(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "millionaire_answer":
-                answer_index = int(params.get("answer", -1) or -1)
-                if answer_index < 0:
-                    return _addon_response({"text": "Pick an answer 🤷"})
-                return _hangman_update(await millionaire.answer(db, game_id, profile, answer_index))
-            if method == "millionaire_5050":
-                return _hangman_update(await millionaire.use_5050(db, game_id, profile))
-            if method == "millionaire_hint":
-                return _hangman_update(await millionaire.use_hint(db, game_id, profile))
-            if method == "millionaire_new":
-                return _hangman_update(await millionaire.new_game(db, game_id, profile))
-            if method == "millionaire_quit":
-                return _hangman_update(await millionaire.quit_game(db, game_id, profile))
-    except Exception:
-        logger.exception("millionaire_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED millionaire_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_wordle_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам Wordle: старт, попытка угадать слово, новая игра, рейтинг."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import wordle
-            from app.services.form_parsing import parse_form_inputs
-
-            if method == "wordle_leaderboard":
-                return _addon_response(await wordle.leaderboard_response(db))
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_wordle":
-                return _addon_response(await wordle.start_wordle(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "wordle_guess":
-                values = parse_form_inputs(form_inputs).get("word") or [""]
-                return _hangman_update(await wordle.guess(db, game_id, profile, values[0]))
-            if method == "wordle_new":
-                return _hangman_update(await wordle.new_game(db, game_id, profile))
-            if method == "wordle_quit":
-                return _hangman_update(await wordle.quit_game(db, game_id, profile))
-    except Exception:
-        logger.exception("wordle_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED wordle_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_two_truths_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Две правды, одна ложь»: старт, выбор, новый набор."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import two_truths
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_two_truths":
-                return _addon_response(await two_truths.start_two_truths(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "two_truths_pick":
-                choice = int(params.get("choice", 0) or 0)
-                return _hangman_update(await two_truths.pick(db, game_id, profile, choice))
-            if method == "two_truths_new":
-                return _hangman_update(await two_truths.new_game(db, game_id, profile))
-    except Exception:
-        logger.exception("two_truths_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED two_truths_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_word_puzzle_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Словесного пазла»: старт, проверка порядка, новый пазл."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import word_puzzle
-            from app.services.form_parsing import parse_form_inputs
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_word_puzzle":
-                return _addon_response(await word_puzzle.start_word_puzzle(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "word_puzzle_check":
-                values = parse_form_inputs(form_inputs).get("order") or [""]
-                return _hangman_update(await word_puzzle.check(db, game_id, profile, values[0]))
-            if method == "word_puzzle_new":
-                return _hangman_update(await word_puzzle.new_game(db, game_id, profile))
-    except Exception:
-        logger.exception("word_puzzle_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED word_puzzle_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_translation_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Переведи-ка»: старт, проверка перевода, следующая пара, финиш."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import translation
-            from app.services.form_parsing import parse_form_inputs
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_translation":
-                return _addon_response(await translation.start_translation(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "translation_check":
-                values = parse_form_inputs(form_inputs).get("answer") or [""]
-                return _hangman_update(await translation.check(db, game_id, profile, values[0]))
-            if method == "translation_next":
-                return _hangman_update(await translation.next_round(db, game_id, profile))
-            if method == "translation_finish":
-                return _hangman_update(await translation.finish(db, game_id, profile))
-    except Exception:
-        logger.exception("translation_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED translation_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_words_of_wonders_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Words of Wonders»: старт, проверка слова, сдача, новый пазл."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import words_of_wonders
-            from app.services.form_parsing import parse_form_inputs
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_wow":
-                return _addon_response(await words_of_wonders.start(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "wow_check":
-                values = parse_form_inputs(form_inputs).get("answer") or [""]
-                return _hangman_update(await words_of_wonders.check(db, game_id, profile, values[0]))
-            if method == "wow_reveal":
-                return _hangman_update(await words_of_wonders.reveal(db, game_id, profile))
-            if method == "wow_new":
-                return _hangman_update(await words_of_wonders.new_game(db, game_id, profile))
-    except Exception:
-        logger.exception("words_of_wonders_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED wow_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-async def _handle_riddles_action(chat_data: dict, common: dict, method: str) -> JSONResponse:
-    """Клик по кнопкам «Riddles»: старт, проверка ответа, подсказка, сдача, следующая, финиш."""
-    params = _params_dict(common)
-    user = chat_data.get("user", {})
-    workspace_user_id = user.get("name", "")
-    form_inputs = common.get("formInputs", {}) or {}
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-
-    try:
-        async with AsyncSessionLocal() as db:
-            from app.services import riddles
-            from app.services.form_parsing import parse_form_inputs
-
-            if not workspace_user_id:
-                return _addon_response({"text": "Couldn't identify you 😕"})
-            profile = await get_or_create_profile(
-                db, workspace_user_id=workspace_user_id,
-                email=user.get("email"), display_name=user.get("displayName"),
-            )
-
-            if method == "menu_riddles":
-                return _addon_response(await riddles.start(db, space_name, profile))
-
-            game_id = int(params.get("game_id", 0) or 0)
-            if not game_id:
-                return _addon_response({"text": "Game not found 🤷"})
-
-            if method == "riddle_check":
-                values = parse_form_inputs(form_inputs).get("answer") or [""]
-                return _hangman_update(await riddles.check(db, game_id, profile, values[0]))
-            if method == "riddle_hint":
-                return _hangman_update(await riddles.hint(db, game_id, profile))
-            if method == "riddle_reveal":
-                return _hangman_update(await riddles.reveal(db, game_id, profile))
-            if method == "riddle_next":
-                return _hangman_update(await riddles.next_riddle(db, game_id, profile))
-            if method == "riddle_finish":
-                return _hangman_update(await riddles.finish(db, game_id, profile))
-    except Exception:
-        logger.exception("riddles_action_failed method=%s", method)
-        return _game_response({"text": "Error processing that action 🤕"})
-    logger.info("event=BUTTON_CLICKED riddles_unknown method=%r", method)
-    return JSONResponse(content={})
-
-
-def _dm_games_menu_card(action_url: str) -> dict:
-    """Карточка-меню ДМ-игр: по кнопке — соло-игра в личке или общее меню рейтингов."""
-
-    def _btn(text: str, method: str) -> dict:
-        return {
-            "text": text,
-            "onClick": {"action": {
-                "function": action_url,
-                "parameters": [{"key": "method", "value": method}],
-            }},
-        }
-
-    return {"cardsV2": [{
-        "cardId": "dmGamesMenu",
-        "card": {
-            "header": {"title": "What shall we play in DM? 🎮", "subtitle": "Solo games vs the bot"},
-            "sections": [{"widgets": [{"buttonList": {"buttons": [
-                _btn("💀 Hangman", "menu_hangman"),
-                _btn("💎 Millionaire", "menu_millionaire"),
-                _btn("🟩 Wordle", "menu_wordle"),
-                _btn("🤥 Two truths & a lie", "menu_two_truths"),
-                _btn("🧩 Word puzzle", "menu_word_puzzle"),
-                _btn("🔤 Translate it", "menu_translation"),
-                _btn("🔠 Words of Wonders", "menu_wow"),
-                _btn("🤔 Riddles", "menu_riddles"),
-                _btn("🎓 Learn English (calls)", "menu_callready"),
-                _btn("🌍 English by level", "menu_leveled"),
-            ]}}]}],
-        },
-    }]}
-
-
-
-async def _dm_games_command_response(chat_data: dict) -> JSONResponse:
-    """Команда «games» в личке: показать меню ДМ-игр."""
-    space = _extract_space_dict(chat_data)
-    space_name = space.get("name", "")
-    if not space_name or not space_name.startswith("spaces/"):
-        return _addon_response({"text": "Couldn't determine the space 🤷"})
-    return _addon_response(_dm_games_menu_card(settings.chat_app_audience))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # Пункты меню рейтингов: (эмодзи, подпись, method). Добавляй новые игры сюда.
-_RATINGS_MENU_ITEMS = [
-    ("💀", "Hangman", "hangman_leaderboard"),
-    ("💎", "Millionaire", "millionaire_leaderboard"),
-    ("🟩", "Wordle", "wordle_leaderboard"),
-]
 
 
-def _ratings_menu_card(action_url: str) -> dict:
-    """Меню рейтингов по играм — расширяемое: добавляй новые игры в _RATINGS_MENU_ITEMS."""
-
-    def _btn(text: str, method: str) -> dict:
-        return {
-            "text": text,
-            "onClick": {"action": {
-                "function": action_url,
-                "parameters": [{"key": "method", "value": method}],
-            }},
-        }
-
-    buttons = [_btn(f"{emoji} {label}", method) for emoji, label, method in _RATINGS_MENU_ITEMS]
-    return {"cardsV2": [{
-        "cardId": "ratingsMenu",
-        "card": {
-            "header": {"title": "Game ratings 🏆", "subtitle": "Pick a game"},
-            "sections": [{"widgets": [{"buttonList": {"buttons": buttons}}]}],
-        },
-    }]}
-
-
-async def _leaderboard_text() -> str:
-    """Текст топ-N лидерборда по сумме баллов."""
-    from app.services.leaderboard import get_leaderboard
-
-    try:
-        async with AsyncSessionLocal() as db:
-            rows = await get_leaderboard(db, top_n=10)
-    except Exception:
-        logger.exception("leaderboard_failed")
-        return "Couldn't show the leaderboard 🤒"
-    if not rows:
-        return "Nobody has points yet — check in at a meeting to get on the board! 🏆"
-    lines = [
-        f"{i}. {r['name'] or '—'} — {r['points']} {_points_word(r['points'])}"
-        for i, r in enumerate(rows, 1)
-    ]
-    return "🏆 Leaderboard:\n" + "\n".join(lines)
 
 
 def _is_onboarding_command(raw_text: str) -> bool:
@@ -1843,12 +739,6 @@ def _onboarding_response_payload(user_name: str, space: dict) -> dict:
     return {"text": "DM me to fill in the form 🙌"}
 
 
-def _action_method(action: dict) -> str:
-    """Имя действия из параметров клика (add-on: [{"key": "method", "value": ...}])."""
-    for param in action.get("parameters") or []:
-        if isinstance(param, dict) and param.get("key") == "method":
-            return str(param.get("value", ""))
-    return ""
 
 
 def _onboarding_action_method(common: dict) -> str:
@@ -2087,6 +977,139 @@ def _onboarding_card(user_name: str) -> dict:
     }
 
 
+def build_mode_choice_card(action_url: str) -> dict:
+    """Карточка «Choose mode»: demo (быстрый цикл) или orig (обычный режим)."""
+    return {
+        "cardsV2": [
+            {
+                "cardId": "modeChoice",
+                "card": {
+                    "header": {
+                        "title": "Choose how to run",
+                        "subtitle": "Pick a mode to start EnglishMeetBot",
+                    },
+                    "sections": [
+                        {
+                            "widgets": [
+                                {
+                                    "buttonList": {
+                                        "buttons": [
+                                            {
+                                                "text": "🚀 Demo (fast cycle)",
+                                                "onClick": {
+                                                    "action": {
+                                                        "function": action_url or "choose_mode",
+                                                        "parameters": [
+                                                            {"key": "method", "value": "choose_mode"},
+                                                            {"key": "mode", "value": "demo"},
+                                                        ],
+                                                    }
+                                                },
+                                            },
+                                            {
+                                                "text": "📅 Original (weekly)",
+                                                "onClick": {
+                                                    "action": {
+                                                        "function": action_url or "choose_mode",
+                                                        "parameters": [
+                                                            {"key": "method", "value": "choose_mode"},
+                                                            {"key": "mode", "value": "orig"},
+                                                        ],
+                                                    }
+                                                },
+                                            },
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+
+async def _handle_choose_mode(chat_data: dict, common: dict) -> JSONResponse:
+    """Кнопка выбора режима: demo → быстрый цикл, orig → обычный режим."""
+    params = _normalize_params(common.get("parameters"))
+    mode = params.get("mode", "")
+    space = _extract_space_dict(chat_data)
+    space_name = space.get("name", "")
+
+    if mode == "demo":
+        try:
+            async with AsyncSessionLocal() as db:
+                from app.services.mode_control import enable_demo_mode
+
+                await enable_demo_mode(db, space_id=space_name)
+            # Онбординг сразу: @упоминание всех в группу + анкета в личку тем, у кого есть DM.
+            if space_name:
+                await _run_onboarding(space_name, space, force=True)
+            from app.scheduler import schedule_fast_cycle, scheduler
+
+            if scheduler is not None:
+                from app.services.weekly_poll import get_or_create_config
+
+                async with AsyncSessionLocal() as db:
+                    step = int((await get_or_create_config(db, "fast_cycle_seconds", 60)).value or 60)
+                schedule_fast_cycle(step)
+        except Exception:
+            logger.exception("choose_mode_demo_failed")
+            return _addon_response({"text": "Couldn't start demo mode."})
+        return JSONResponse(content={})
+
+    if mode == "orig":
+        try:
+            async with AsyncSessionLocal() as db:
+                from app.services.mode_control import enable_normal_mode
+
+                await enable_normal_mode(db)
+            if space_name:
+                await _run_onboarding(space_name, space)
+            async with AsyncSessionLocal() as db:
+                from app.services.weekly_poll import ensure_weekly_poll, send_weekly_poll_card
+
+                poll = await ensure_weekly_poll(db)
+                await send_weekly_poll_card(db, poll)
+        except Exception:
+            logger.exception("choose_mode_orig_failed")
+            return _addon_response({"text": "Couldn't start original mode."})
+        return JSONResponse(content={})
+
+    return _addon_response({"text": "Unknown mode."})
+
+
+async def _send_mode_choice(space_name: str, space: dict) -> None:
+    """При добавлении в группу: записать space_id и спросить demo/orig."""
+    if not space_name:
+        return
+    try:
+        from app.services.weekly_poll import get_or_create_config
+
+        async with AsyncSessionLocal() as db:
+            if not _space_is_dm(space):
+                cfg = await get_or_create_config(db, "space_id", space_name)
+                if cfg.value != space_name:
+                    cfg.value = space_name
+                    await db.commit()
+    except Exception:
+        logger.exception("mode_choice_space_id_failed space=%s", space_name)
+        return
+    try:
+        from app.services.chat_sender import send_message as send_space_message
+
+        card = build_mode_choice_card(settings.chat_app_audience)
+        await asyncio.to_thread(
+            send_space_message,
+            space_name,
+            text="How should I run? Pick a mode 👇",
+            cards_v2=card["cardsV2"],
+        )
+    except Exception:
+        logger.exception("mode_choice_send_failed space=%s", space_name)
+
+
 async def _register_contact(chat_data: dict, space_name: str) -> None:
     """Зарегистрировать профиль пользователя события (момент первого контакта).
 
@@ -2119,20 +1142,22 @@ async def _register_contact(chat_data: dict, space_name: str) -> None:
         logger.warning("added_to_space_without_user_name, db write skipped")
 
 
-async def _run_onboarding(space_name: str, space: dict) -> dict:
+async def _run_onboarding(space_name: str, space: dict, force: bool = False) -> dict:
     """Онбординг при добавлении в пространство: анкета в личку, @упоминание в группу.
 
     space_id в config пишем ТОЛЬКО для группы/комнаты (не DM): джобы ежедневного
     опроса и итогов должны слать в группу, а не в личку. В DM space_id не трогаем.
-    Через onboard_space_members планируем каналы:
+    Через check_new_members планируем каналы (и помечаем onboarding_invite_sent,
+    чтобы фоновый поллинг не прислал приглашение тем же людям повторно):
       - plan["dm"] — уже есть DM с ботом и онбординг не пройден → анкета в личку;
       - plan["mention"] — нет DM → @упоминание в группу с просьбой написать боту.
+    force=True — онбордить всех участников (демо fast_cycle).
     Возвращает план: {'dm': [...], 'mention': [...]}.
     """
     from app.messaging import send_message
     from app.schemas import MessagePayload
     from app.services.chat_sender import send_text
-    from app.services.space_onboarding import onboard_space_members
+    from app.services.space_onboarding import check_new_members
     from app.services.weekly_poll import get_or_create_config
 
     plan: dict = {"dm": [], "mention": []}
@@ -2146,7 +1171,7 @@ async def _run_onboarding(space_name: str, space: dict) -> dict:
                 if cfg.value != space_name:
                     cfg.value = space_name
                     await db.commit()
-            plan = await onboard_space_members(db, space_name)
+            plan = await check_new_members(db, space_name, force=force)
     except Exception:
         # Сбой планирования не должен ронять обработку события
         logger.exception("onboarding_plan_failed space=%s", space_name)
@@ -2196,8 +1221,10 @@ async def _handle_member_added(space_name: str, member_name: str) -> None:
     try:
         async with AsyncSessionLocal() as db:
             profile = await get_or_create_profile(db, workspace_user_id=member_name)
-            if profile.onboarding_completed:
-                return  # уже онборднут — не трогаем
+            if profile.onboarding_completed or profile.onboarding_invite_sent:
+                return  # уже онборднут/приглашён — не трогаем
+            profile.onboarding_invite_sent = True
+            await db.commit()
             if profile.chat_space_id:
                 await asyncio.to_thread(
                     send_message,
@@ -2210,73 +1237,12 @@ async def _handle_member_added(space_name: str, member_name: str) -> None:
         logger.exception("member_added_onboarding_failed member=%s", member_name)
 
 
-def _reply_text(user_name: str, raw_text: str) -> str:
-    """Текст ответа на MESSAGE: приветствие или echo."""
-    if any(g in raw_text.lower() for g in ("hi", "hello")):
-        return (
-            f"Hi {user_name}! 👋\n\n"
-            "I'm still learning, but soon we'll start "
-            "organizing awesome English meetups!"
-        )
-    return (
-        f'Got it, you wrote: "{raw_text}"\n\n'
-        "I don't know what to do with that yet, but I'll learn soon!"
-    )
 
 
-def _addon_response(message: dict) -> JSONResponse:
-    """Ответ в формате Google Workspace Add-on (CreateMessageAction).
-
-    Для Chat-приложений, получающих события с обёрткой "chat" (messagePayload и т.п.),
-    ответ обязан быть обёрнут в hostAppDataAction.chatDataAction.createMessageAction.
-    """
-    return JSONResponse(
-        content={
-            "hostAppDataAction": {
-                "chatDataAction": {
-                    "createMessageAction": {"message": message}
-                }
-            }
-        }
-    )
 
 
-def _addon_update_message(message_name: str, card: dict) -> JSONResponse:
-    """Ответ updateMessageAction: обновить карточку на месте (add-on формат)."""
-    return JSONResponse(content={
-        "hostAppDataAction": {
-            "chatDataAction": {
-                "updateMessageAction": {
-                    "message": {
-                        "name": message_name,
-                        "cardsV2": card.get("cardsV2"),
-                    }
-                }
-            }
-        }
-    })
 
 
-def _addon_update_response(cards_v2: list[dict] | None = None, text: str = "") -> JSONResponse:
-    """Обновить сообщение/карточку, на которой нажали кнопку (updateMessageAction без name).
-
-    Для корректной замены карточки у неё должен быть тот же cardId, что и у
-    карточки с нажатой кнопкой (Google сам понимает, какое сообщение обновлять).
-    """
-    message: dict = {}
-    if text:
-        message["text"] = text
-    if cards_v2:
-        message["cardsV2"] = cards_v2
-    return JSONResponse(
-        content={
-            "hostAppDataAction": {
-                "chatDataAction": {
-                    "updateMessageAction": {"message": message}
-                }
-            }
-        }
-    )
 
 
 @router.post("/google-chat")
@@ -2306,6 +1272,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if "buttonClickedPayload" in chat_data:
             common = event.get("commonEventObject", {}) or {}
             method = _onboarding_action_method(common)
+            if method == "choose_mode":
+                return await _handle_choose_mode(chat_data, common)
             if method == "submit_onboarding":
                 form_inputs = common.get("formInputs", {}) or {}
                 space = _extract_space_dict(chat_data)
@@ -2411,6 +1379,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
                 "riddle_next", "riddle_finish",
             ):
                 return await _handle_riddles_action(chat_data, common, method)
+            if method in (
+                "menu_crossword", "crossword_check", "crossword_reveal",
+                "crossword_new", "crossword_quit",
+            ):
+                return await _handle_crossword_action(chat_data, common, method)
             if method in ("wheel_join", "wheel_start", "wheel_spin", "wheel_guess", "wheel_finish"):
                 return await _handle_wheel_action(chat_data, common, method)
             if method.startswith("callready_"):
@@ -2434,6 +1407,12 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             if _is_onboarding_command(raw_text):
                 space = _extract_space_dict(chat_data)
                 return _addon_response(_onboarding_response_payload(user_name, space))
+
+            # Выбор режима (demo/orig): показать стартовую карточку вручную.
+            if _is_mode_command(raw_text):
+                space = _extract_space_dict(chat_data)
+                await _send_mode_choice(space.get("name", ""), space)
+                return JSONResponse(content={})
 
             # Инфо о боте — работает и в личке, и в группе.
             if _is_info_command(raw_text):
@@ -2537,17 +1516,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             space_name = space.get("name", "")
             logger.info("event=ADDED_TO_SPACE format=addon user=%r space=%s", user_name, space_name)
             await _register_contact(chat_data, space_name)
-            # Онбординг: анкета в личку / @упоминание в группу
-            await _run_onboarding(space_name, space)
-            # fast_cycle: при добавлении бота в группу запускаем одиночный прогон цикла.
-            from app.scheduler import schedule_fast_cycle, scheduler
-            from app.services.weekly_poll import get_or_create_config
-
-            async with AsyncSessionLocal() as _db:
-                _fast = bool((await get_or_create_config(_db, "fast_cycle", False)).value)
-                _step = int((await get_or_create_config(_db, "fast_cycle_seconds", 600)).value or 600)
-            if _fast and scheduler is not None:
-                schedule_fast_cycle(_step)
+            # Спросить demo/orig — режим запускается после ответа, а не сразу.
+            await _send_mode_choice(space_name, space)
             return JSONResponse(content={})
 
         # Нового участника добавили в существующую группу
@@ -2585,8 +1555,8 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         space = event.get("space", {})
         space_name = space.get("name", "")
         await _register_contact(event, space_name)
-        # Онбординг: анкета в личку / @упоминание в группу
-        await _run_onboarding(space_name, space)
+        # Спросить demo/orig — режим запускается после ответа, а не сразу.
+        await _send_mode_choice(space_name, space)
         return JSONResponse(content={})
 
     if event_type == "MEMBERSHIP_ADDED":
@@ -2609,6 +1579,10 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
         if _is_onboarding_command(raw_text):
             space = event.get("space", {})
             return JSONResponse(content=_onboarding_response_payload(user_name, space))
+        if _is_mode_command(raw_text):
+            space = event.get("space", {})
+            await _send_mode_choice(space.get("name", ""), space)
+            return JSONResponse(content={})
         if _is_info_command(raw_text):
             return JSONResponse(content=_info_card(_space_is_dm(event.get("space", {}))))
         if _is_learn_command(raw_text) and _space_is_dm(event.get("space", {})):
@@ -2695,6 +1669,13 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             or ""
         )
         method = _action_method(action)
+        if function_name == "choose_mode" or method == "choose_mode":
+            params = {}
+            for p in action.get("parameters") or []:
+                if isinstance(p, dict) and p.get("key"):
+                    params[p.get("key")] = p.get("value")
+            chat_data = {"user": event.get("user", {}), "space": event.get("space", {})}
+            return await _handle_choose_mode(chat_data, {"parameters": params})
         if function_name == "submit_onboarding" or method == "submit_onboarding":
             user = event.get("user", {})
             space = event.get("space", {})
@@ -2832,6 +1813,11 @@ async def handle_google_chat_webhook(request: Request) -> JSONResponse:
             "riddle_next", "riddle_finish",
         ):
             return await _handle_riddles_action(event, common, method)
+        if method in (
+            "menu_crossword", "crossword_check", "crossword_reveal",
+            "crossword_new", "crossword_quit",
+        ):
+            return await _handle_crossword_action(event, common, method)
         if method in ("wheel_join", "wheel_start", "wheel_spin", "wheel_guess", "wheel_finish"):
             return await _handle_wheel_action(event, common, method)
         if method.startswith("callready_"):

@@ -6,6 +6,7 @@
 на домен — см. Фазу B в PLAN.md).
 """
 import logging
+import time
 
 import requests
 from google.auth.transport.requests import Request as GoogleRequest
@@ -17,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 CHAT_API_BASE = "https://chat.googleapis.com/v1"
+
+# Google ограничивает частоту отправки сообщений: при 429/503 не падаем и не теряем
+# сообщение, а ждём (Retry-After или экспоненциальная пауза) и повторяем.
+RETRYABLE_STATUSES = frozenset({429, 503})
+_MAX_RETRIES = 4
+_BASE_BACKOFF_SECONDS = 1.0
 
 
 _CREDENTIALS: service_account.Credentials | None = None
@@ -40,6 +47,51 @@ def _bot_credentials() -> service_account.Credentials:
     return _CREDENTIALS
 
 
+def _auth_header() -> dict:
+    """Заголовок Authorization со свежим токеном (обновляем по истечении часа)."""
+    creds = _bot_credentials()
+    if creds.expired:
+        creds.refresh(GoogleRequest())
+    return {"Authorization": f"Bearer {creds.token}"}
+
+
+def _retry_after_seconds(resp, attempt: int) -> float:
+    """Пауза перед повтором: заголовок Retry-After, иначе экспоненциальный backoff."""
+    raw = resp.headers.get("Retry-After")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return _BASE_BACKOFF_SECONDS * (2 ** attempt)
+
+
+def _request(
+    method: str,
+    url: str,
+    *,
+    json: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """HTTP-запрос к Chat API с повтором на rate-limit (429) и 503."""
+    headers = _auth_header()
+    for attempt in range(_MAX_RETRIES):
+        resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=15)
+        if resp.ok:
+            return resp.json()
+        if resp.status_code in RETRYABLE_STATUSES and attempt < _MAX_RETRIES - 1:
+            delay = _retry_after_seconds(resp, attempt)
+            logger.warning(
+                "chat_api_throttled method=%s status=%s attempt=%s/%s delay=%.1fs",
+                method, resp.status_code, attempt + 1, _MAX_RETRIES, delay,
+            )
+            time.sleep(delay)
+            continue
+        logger.error("chat_api_error method=%s status=%s body=%s", method, resp.status_code, resp.text)
+        resp.raise_for_status()
+    raise RuntimeError(f"chat request failed after {_MAX_RETRIES} attempts: {url}")
+
+
 def send_text(space_name: str, text: str) -> dict:
     """Отправить текстовое сообщение в пространство от имени бота.
 
@@ -55,7 +107,6 @@ def send_message(
     cards: list[dict] | None = None,
 ) -> dict:
     """Отправить сообщение (текст и/или Cards V1/V2) в пространство от имени бота."""
-    creds = _bot_credentials()
     body: dict = {}
     if text:
         body["text"] = text
@@ -63,17 +114,9 @@ def send_message(
         body["cardsV2"] = cards_v2
     if cards:
         body["cards"] = cards
-    resp = requests.post(
-        f"{CHAT_API_BASE}/{space_name}/messages",
-        headers={"Authorization": f"Bearer {creds.token}"},
-        json=body,
-        timeout=15,
-    )
-    if not resp.ok:
-        logger.error("chat_api_error status=%s body=%s", resp.status_code, resp.text)
-    resp.raise_for_status()
-    logger.info("message_sent space=%s status=%s", space_name, resp.status_code)
-    return resp.json()
+    result = _request("POST", f"{CHAT_API_BASE}/{space_name}/messages", json=body)
+    logger.info("message_sent space=%s", space_name)
+    return result
 
 
 def patch_message(
@@ -86,7 +129,6 @@ def patch_message(
     message_name — имя вида 'spaces/XXX/messages/YYY' (из resp['name'] от send_message).
     updateMask строится по тому, какие поля переданы (text и/или cardsV2).
     """
-    creds = _bot_credentials()
     update_fields: list[str] = []
     body: dict = {}
     if text is not None:
@@ -97,18 +139,14 @@ def patch_message(
         update_fields.append("cardsV2")
     if not update_fields:
         return {}
-    resp = requests.patch(
+    result = _request(
+        "PATCH",
         f"{CHAT_API_BASE}/{message_name}",
-        params={"updateMask": ",".join(update_fields)},
-        headers={"Authorization": f"Bearer {creds.token}"},
         json=body,
-        timeout=15,
+        params={"updateMask": ",".join(update_fields)},
     )
-    if not resp.ok:
-        logger.error("chat_patch_error status=%s body=%s", resp.status_code, resp.text)
-    resp.raise_for_status()
-    logger.info("message_patched name=%s status=%s", message_name, resp.status_code)
-    return resp.json()
+    logger.info("message_patched name=%s", message_name)
+    return result
 
 
 def list_space_members(space_name: str) -> list[dict]:
@@ -116,14 +154,13 @@ def list_space_members(space_name: str) -> list[dict]:
 
     Возвращает массив memberships, где member.name вида 'users/<id>' у человека.
     """
-    creds = _bot_credentials()
     memberships: list[dict] = []
     page_token: str | None = None
     while True:
         params = {"pageToken": page_token} if page_token else None
         resp = requests.get(
             f"{CHAT_API_BASE}/{space_name}/members",
-            headers={"Authorization": f"Bearer {creds.token}"},
+            headers=_auth_header(),
             params=params,
             timeout=15,
         )
@@ -138,14 +175,13 @@ def list_space_members(space_name: str) -> list[dict]:
 
 def list_bot_spaces() -> list[dict]:
     """Все пространства, где состоит бот (spaces.list, app-auth)."""
-    creds = _bot_credentials()
     spaces: list[dict] = []
     page_token: str | None = None
     while True:
         params = {"pageToken": page_token} if page_token else None
         resp = requests.get(
             f"{CHAT_API_BASE}/spaces",
-            headers={"Authorization": f"Bearer {creds.token}"},
+            headers=_auth_header(),
             params=params,
             timeout=15,
         )

@@ -20,7 +20,11 @@ POST_MEETING_DELAY_SECONDS = 10
 
 
 async def run_cycle(step_seconds: int) -> None:
-    """Прогнать один цикл: опрос → вопросы → голоса → кворум → напоминание → карточка → чек-ин."""
+    """Прогнать один цикл: опрос → вопросы → кворум → напоминание → карточка → чек-ин.
+
+    Онбординг сюда не входит — он выполняется сразу при нажатии «Demo» (в _handle_choose_mode),
+    чтобы первым видимым сообщением было приглашение в онбординг, а не подтверждение кнопки.
+    """
     from app.services.weekly_poll import (
         DAYS,
         active_weekly_poll,
@@ -32,6 +36,10 @@ async def run_cycle(step_seconds: int) -> None:
 
     tz = ZoneInfo(get_settings().app_timezone)
     today_dow = datetime.now(tz).weekday()
+
+    # День демо-встречи: config['demo_day'] (ставит enable_demo_mode), иначе сегодня.
+    async with AsyncSessionLocal() as db:
+        demo_day = int((await get_or_create_config(db, "demo_day", today_dow)).value or today_dow)
 
     async def pause() -> None:
         if step_seconds > 0:
@@ -61,7 +69,7 @@ async def run_cycle(step_seconds: int) -> None:
     while meeting_id is None and datetime.now(timezone.utc) < deadline:
         async with AsyncSessionLocal() as db:
             poll = await active_weekly_poll(db)
-            result = await finalize_day(db, poll, today_dow) if poll else None
+            result = await finalize_day(db, poll, demo_day) if poll else None
             requested = poll is not None and bool(
                 (await get_or_create_config(db, "finish_voting_requested", False)).value
             )
@@ -90,7 +98,7 @@ async def run_cycle(step_seconds: int) -> None:
                 space_id = (await get_or_create_config(db, "space_id", "")).value or ""
                 if space_id:
                     await asyncio.to_thread(
-                        send_text, space_id, f"🗓️ {build_invite_text(DAYS[today_dow], time_str, None)}"
+                        send_text, space_id, f"🗓️ {build_invite_text(DAYS[demo_day], time_str, None)}"
                     )
                 logger.info("fast_cycle step=кворум встреча_создана id=%s", meeting_id)
             await db.rollback()

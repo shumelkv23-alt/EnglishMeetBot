@@ -1,5 +1,8 @@
 """Приглашения: персональные, пост в Space, эскалация организатору (REQ-5, REQ-9.5)."""
 from app.schemas import Activity
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from app.config import get_settings
 
 
 def _theme_from_activity(activity: Activity | None) -> str | None:
@@ -96,7 +99,7 @@ async def handle_time_finalized(
         sch.add_job(
             _open_checkin, "date", run_date=open_at,
             id=checkin_job_ids(str(instance_id))["open"], replace_existing=True,
-            args=[space_id, build_checkin_card(str(instance_id), action_url=get_settings().chat_app_audience)],
+            args=[str(instance_id), space_id, build_checkin_card(str(instance_id), action_url=get_settings().chat_app_audience)],
         )
         sch.add_job(
             _close_checkin, "date", run_date=close_at,
@@ -128,8 +131,11 @@ async def _send_reminder(instance_id: str) -> None:
         meeting = (
             await db.execute(select(MeetingORM).where(MeetingORM.id == int(instance_id)))
         ).scalar_one_or_none()
-        if meeting is None:
-            logger.warning("reminder_no_meeting instance=%s", instance_id)
+        if meeting is None or meeting.status != "scheduled":
+            logger.warning(
+                "reminder_skipped instance=%s status=%s",
+                instance_id, meeting.status if meeting else None,
+            )
             return
         day, time_ = local_time_parts(meeting.scheduled_start)
         text = build_invite_text(day, time_, None)
@@ -139,8 +145,22 @@ async def _send_reminder(instance_id: str) -> None:
         logger.info("reminder_sent instance=%s", instance_id)
 
 
-def _open_checkin(space_id: str, card: dict) -> None:
-    """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space."""
+async def _open_checkin(instance_id: str, space_id: str, card: dict) -> None:
+    """Открытие окна: карточка с кнопкой «Я на встрече» в общий Space.
+
+    Проверяем статус встречи: если её отменили, карточку не шлём (иначе после
+    отмены придёт пустая «встреча начинается»).
+    """
+    async with AsyncSessionLocal() as db:
+        meeting = (
+            await db.execute(select(MeetingORM).where(MeetingORM.id == int(instance_id)))
+        ).scalar_one_or_none()
+        if meeting is None or meeting.status != "scheduled":
+            logger.warning(
+                "checkin_open_skipped instance=%s status=%s",
+                instance_id, meeting.status if meeting else None,
+            )
+            return
     if space_id:
         send_space_message(space_id, text="The meetup is starting — check in! ✅", cards_v2=card.get("cardsV2"))
 
